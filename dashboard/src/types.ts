@@ -100,4 +100,5 @@ export interface Receipt {
   order_number: string
   amount: number
   date: string
+  pdf_url?: string
 }

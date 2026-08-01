@@ -763,6 +763,25 @@ button:disabled {
   border-color: #2563eb;
   box-shadow: 0 6px 18px rgba(37, 99, 235, 0.08);
 }
+
+.receipt-preview-card {
+  padding: 16px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid #eef2f6;
+}
+
+@media (max-width: 640px) {
+  .receipt-grid {
+    grid-template-columns: 1fr;
+  }
+  .receipt-detail {
+    order: 2;
+  }
+  .receipt-list {
+    order: 1;
+  }
+}
   background: #ffffff;
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }

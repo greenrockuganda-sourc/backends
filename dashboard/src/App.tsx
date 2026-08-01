@@ -1322,10 +1322,11 @@ function App() {
               <div className="receipt-list">
                 <div style={{ padding: '8px 0' }}>
                   <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-                    <input type="date" value={receiptDateFrom} onChange={(e) => setReceiptDateFrom(e.target.value)} className="input" style={{ padding: 8, borderRadius: 8, border: '1px solid #e2e8f0' }} />
-                    <input type="date" value={receiptDateTo} onChange={(e) => setReceiptDateTo(e.target.value)} className="input" style={{ padding: 8, borderRadius: 8, border: '1px solid #e2e8f0' }} />
+                    <input aria-label="Receipt date from" type="date" value={receiptDateFrom} onChange={(e) => setReceiptDateFrom(e.target.value)} className="input" style={{ padding: 8, borderRadius: 8, border: '1px solid #e2e8f0' }} />
+                    <input aria-label="Receipt date to" type="date" value={receiptDateTo} onChange={(e) => setReceiptDateTo(e.target.value)} className="input" style={{ padding: 8, borderRadius: 8, border: '1px solid #e2e8f0' }} />
                   </div>
                   <input
+                    aria-label="Search receipts"
                     placeholder="Search receipts by number, order or customer"
                     value={receiptSearch}
                     onChange={(e) => setReceiptSearch(e.target.value)}
@@ -1390,7 +1391,7 @@ function App() {
                       <label className="field-label">
                         Send receipt to email
                         <div style={{ display: 'flex', gap: 8 }}>
-                          <input value={emailToSend} onChange={(e) => setEmailToSend(e.target.value)} placeholder="customer@example.com" />
+                          <input aria-label="Recipient email" value={emailToSend} onChange={(e) => setEmailToSend(e.target.value)} placeholder="customer@example.com" />
                           <button
                             type="button"
                             className="secondary"
@@ -1400,8 +1401,12 @@ function App() {
                               setSendingEmail(selectedReceipt.id)
                               setSendStatus(null)
                               try {
-                                await sendReceiptEmail(token, selectedReceipt.id, { email: emailToSend })
+                                const res = await sendReceiptEmail(token, selectedReceipt.id, { email: emailToSend })
                                 setSendStatus('Sent successfully')
+                                // if server returned pdf_url, update local selectedReceipt
+                                if ((res as any)?.pdf_url) {
+                                  selectedReceipt.pdf_url = (res as any).pdf_url
+                                }
                               } catch (err) {
                                 setSendStatus('Failed to send')
                               } finally {
@@ -1411,6 +1416,11 @@ function App() {
                           >
                             Send
                           </button>
+                          {selectedReceipt?.pdf_url ? (
+                            <a href={selectedReceipt.pdf_url} target="_blank" rel="noreferrer">
+                              <button type="button" className="primary">Download PDF</button>
+                            </a>
+                          ) : null}
                         </div>
                       </label>
                       {sendStatus ? <p className="small-text">{sendStatus}</p> : null}

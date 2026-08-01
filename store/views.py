@@ -1679,8 +1679,7 @@ class AdminReceiptEmailAPIView(APIView):
         to_email = request.data.get('email')
         if not to_email:
             return Response({'detail': 'Email address is required.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        # Build simple PDF in-memory
+        # Build PDF in-memory and save to storage for caching
         buffer = BytesIO()
         p = canvas.Canvas(buffer)
         p.setFont('Helvetica', 12)
@@ -1693,16 +1692,37 @@ class AdminReceiptEmailAPIView(APIView):
         p.save()
         buffer.seek(0)
 
-        subject = f"Receipt {receipt.receipt_number}"
-        body = f"Please find attached receipt {receipt.receipt_number}."
-        email = EmailMessage(subject=subject, body=body, to=[to_email])
-        email.attach(f"{receipt.receipt_number}.pdf", buffer.read(), 'application/pdf')
+        filename = f"receipts/{receipt.receipt_number}.pdf"
         try:
+            # save to default storage
+            from django.core.files.base import ContentFile
+
+            default_storage.save(filename, ContentFile(buffer.getvalue()))
+            receipt.pdf_url = request.build_absolute_uri(default_storage.url(filename))
+            receipt.save(update_fields=['pdf_url'])
+        except Exception:
+            # ignore storage errors; we'll still attach the PDF
+            pass
+
+        # render HTML email
+        try:
+            html = render_to_string('email/receipt_email.html', {'receipt': receipt, 'order': receipt.order})
+        except Exception:
+            html = f"Please find attached receipt {receipt.receipt_number}."
+
+        subject = f"Receipt {receipt.receipt_number}"
+        email = EmailMessage(subject=subject, body=html, to=[to_email])
+        email.content_subtype = 'html'
+        # attach the generated PDF
+        try:
+            # re-seek buffer and attach
+            buffer.seek(0)
+            email.attach(f"{receipt.receipt_number}.pdf", buffer.read(), 'application/pdf')
             email.send(fail_silently=False)
         except Exception as e:
             return Response({'detail': 'Failed to send email.', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
-        return Response({'message': 'Email sent.'}, status=status.HTTP_200_OK)
+        return Response({'message': 'Email sent.', 'pdf_url': receipt.pdf_url}, status=status.HTTP_200_OK)
 
 
 class AdminReceiptPDFAPIView(APIView):
