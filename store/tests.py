@@ -1,11 +1,12 @@
 from django.contrib.auth import get_user_model
+from django.core import mail
 from django.core.management import call_command
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import Brand, Category, Order, Product, Recipe
+from .models import Brand, Category, Customer, Order, OrderItem, Product, Receipt, Recipe
 
 User = get_user_model()
 
@@ -336,6 +337,102 @@ class AdminDashboardAndProductAPITests(TestCase):
         dashboard_response = self.client.get(reverse('dashboard'))
         self.assertEqual(dashboard_response.status_code, 200)
         self.assertEqual(dashboard_response.data['summary']['total_products'], 1)
+
+
+@override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
+class AdminReceiptPDFAndEmailTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.admin_user = User.objects.create_user(
+            email='receipt-admin@example.com',
+            password='StrongPass123!',
+            first_name='Receipt',
+            last_name='Admin',
+            role='Admin',
+            is_active=True,
+            is_staff=True,
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {str(RefreshToken.for_user(self.admin_user).access_token)}")
+
+    def create_test_receipt(self):
+        category = Category.objects.create(category_name='Receipt Products')
+        brand = Brand.objects.create(brand_name='Receipt Brand')
+        product = Product.objects.create(
+            category=category,
+            brand=brand,
+            product_name='Salon Oil',
+            buying_price='500',
+            selling_price='1500',
+            quantity_in_stock=10,
+            sku='SKU-RECEIPT-01',
+        )
+        user = User.objects.create_user(
+            email='customer@example.com',
+            password='StrongPass123!',
+            first_name='Customer',
+            last_name='Example',
+            role='Customer',
+            is_active=True,
+        )
+        customer = Customer.objects.create(user=user)
+        order = Order.objects.create(
+            customer=customer,
+            order_number='ORDER-1234',
+            total_amount='1500',
+            delivery_fee='0',
+            discount='0',
+            tax='0',
+            payment_method='PAY_ON_DELIVERY',
+            payment_status='Paid',
+            order_status='Confirmed',
+            delivery_address='123 Salon Street',
+            phone_number='0700000003',
+        )
+        OrderItem.objects.create(
+            order=order,
+            product=product,
+            product_name=product.product_name,
+            quantity=1,
+            unit_price='1500',
+            subtotal='1500',
+        )
+        receipt = Receipt.objects.create(
+            order=order,
+            receipt_number='REC-1234',
+            subtotal='1500',
+            tax='0',
+            delivery_fee='0',
+            total_amount='1500',
+        )
+        return receipt
+
+    def test_admin_can_download_receipt_pdf(self):
+        receipt = self.create_test_receipt()
+        response = self.client.get(reverse('admin_receipt_pdf', kwargs={'receipt_id': receipt.id}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response['Content-Type'], 'application/pdf')
+        self.assertIn(f'filename="{receipt.receipt_number}.pdf"', response['Content-Disposition'])
+        content = b''.join(response.streaming_content)
+        self.assertTrue(content)
+
+    def test_admin_can_send_receipt_email_with_attachment(self):
+        receipt = self.create_test_receipt()
+        response = self.client.post(
+            reverse('admin_receipt_email', kwargs={'receipt_id': receipt.id}),
+            {'email': 'customer@example.com'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['message'], 'Email sent.')
+        self.assertTrue(response.data.get('pdf_url'))
+        self.assertEqual(len(mail.outbox), 1)
+        email = mail.outbox[0]
+        self.assertEqual(email.to, ['customer@example.com'])
+        self.assertEqual(email.subject, f'Receipt {receipt.receipt_number}')
+        self.assertEqual(len(email.attachments), 1)
+        self.assertTrue(str(receipt.receipt_number) in email.attachments[0][0])
 
 
 class HomeCatalogSeedTests(TestCase):

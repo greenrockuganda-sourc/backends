@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Receipt {{ receipt.receipt_number }}</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 0;
+        color: #1f2937;
+        background-color: #f8fafc;
+      }
+      .page {
+        width: 100%;
+        max-width: 900px;
+        margin: 0 auto;
+        padding: 32px;
+        background: #ffffff;
+      }
+      .header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 24px;
+      }
+      .brand {
+        font-size: 2rem;
+        font-weight: 700;
+        color: #1d4ed8;
+        margin: 0;
+      }
+      .subtitle {
+        margin: 8px 0 0;
+        color: #475569;
+        line-height: 1.5;
+      }
+      .receipt-summary,
+      .customer-summary {
+        margin-top: 28px;
+        padding: 22px;
+        border: 1px solid #e2e8f0;
+        border-radius: 16px;
+        background: #f8fafc;
+      }
+      .summary-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 16px;
+      }
+      .summary-item {
+        margin-bottom: 8px;
+        font-size: 0.95rem;
+      }
+      .summary-item strong {
+        display: block;
+        color: #0f172a;
+        margin-bottom: 4px;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 24px;
+      }
+      th,
+      td {
+        padding: 14px 12px;
+        border: 1px solid #e2e8f0;
+        text-align: left;
+        font-size: 0.95rem;
+      }
+      th {
+        background: #eff6ff;
+        color: #1d4ed8;
+        font-weight: 700;
+      }
+      .total-row td {
+        font-weight: 700;
+        border-top: 2px solid #cbd5e1;
+      }
+      .footer {
+        margin-top: 32px;
+        color: #475569;
+        font-size: 0.9rem;
+        line-height: 1.6;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="page">
+      <div class="header">
+        <div>
+          <h1 class="brand">{{ company_name }}</h1>
+          <p class="subtitle">Professional receipts and order records for your salon business.</p>
+        </div>
+        <div>
+          <p class="summary-item"><strong>Receipt</strong>{{ receipt.receipt_number }}</p>
+          <p class="summary-item"><strong>Date</strong>{{ receipt.receipt_date|date:"F j, Y" }}</p>
+          <p class="summary-item"><strong>Order</strong>{{ order.order_number }}</p>
+        </div>
+      </div>
+
+      <div class="summary-grid">
+        <div class="receipt-summary">
+          <p class="summary-item"><strong>Billing</strong>{{ customer.get_full_name|default:customer.email }}</p>
+          <p class="summary-item"><strong>Email</strong>{{ customer.email }}</p>
+          {% if order.delivery_address %}
+          <p class="summary-item"><strong>Address</strong>{{ order.delivery_address }}</p>
+          {% endif %}
+        </div>
+        <div class="customer-summary">
+          <p class="summary-item"><strong>Payment</strong>{{ order.payment_method|default:'Pay on Delivery' }}</p>
+          <p class="summary-item"><strong>Order Status</strong>{{ order.order_status|default:'Pending' }}</p>
+          <p class="summary-item"><strong>Phone</strong>{{ order.phone_number|default:'N/A' }}</p>
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th class="text-right">Qty</th>
+            <th class="text-right">Unit</th>
+            <th class="text-right">Subtotal</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for item in items %}
+            <tr>
+              <td>{{ item.product_name|default:item.product.product_name }}</td>
+              <td>{{ item.quantity }}</td>
+              <td>{{ item.unit_price }}</td>
+              <td>{{ item.subtotal }}</td>
+            </tr>
+          {% empty %}
+            <tr>
+              <td colspan="4">No items available.</td>
+            </tr>
+          {% endfor %}
+          <tr class="total-row">
+            <td colspan="3">Subtotal</td>
+            <td>{{ receipt.subtotal }}</td>
+          </tr>
+          <tr class="total-row">
+            <td colspan="3">Tax</td>
+            <td>{{ receipt.tax }}</td>
+          </tr>
+          <tr class="total-row">
+            <td colspan="3">Delivery Fee</td>
+            <td>{{ receipt.delivery_fee }}</td>
+          </tr>
+          <tr class="total-row">
+            <td colspan="3">Total</td>
+            <td>{{ receipt.total_amount }}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="footer">
+        <p>{{ company_name }} · {{ company_address }}</p>
+        <p>Contact: {{ company_email }} · {{ company_phone }}</p>
+      </div>
+    </div>
+  </body>
+</html>

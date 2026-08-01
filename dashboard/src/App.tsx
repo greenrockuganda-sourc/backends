@@ -16,6 +16,7 @@ import {
   fetchProducts,
   fetchProfile,
   fetchReceipts,
+  fetchReceiptPdf,
   sendReceiptEmail,
   fetchReports,
   login,
@@ -54,6 +55,7 @@ function getSectionTitle(section: Section, role?: string) {
       case 'dashboard':
         return 'Overview'
       case 'products':
+        return 'Products'
       case 'inventory':
         return 'Stock'
       default:
@@ -97,6 +99,7 @@ function App() {
   const [sendingEmail, setSendingEmail] = useState<number | null>(null)
   const [sendStatus, setSendStatus] = useState<string | null>(null)
   const [showProductForm, setShowProductForm] = useState(false)
+  const [showProductCatalog, setShowProductCatalog] = useState(false)
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 640)
 
   const isLoggedIn = Boolean(token)
@@ -600,17 +603,37 @@ function App() {
     window.setTimeout(() => window.print(), 150)
   }
 
+  const downloadReceiptPdf = async (receipt: Receipt) => {
+    if (!token) return
+    setError(null)
+    try {
+      const blob = await fetchReceiptPdf(token, receipt.id)
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${receipt.receipt_number}.pdf`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.URL.revokeObjectURL(url)
+    } catch (err) {
+      setError('Unable to download receipt PDF.')
+    }
+  }
+
   const handleConfirmDelivery = (deliveryId: number) => {
-    setDeliveries((current) =>
-      current.map((item) => (item.id === deliveryId ? { ...item, delivery_status: 'Delivered' } : item)),
-    )
-    setOrders((current) => current.map((order) => {
-      const matchingDelivery = deliveries.find((item) => item.id === deliveryId)
-      if (matchingDelivery && order.order_number === matchingDelivery.order_number) {
-        return { ...order, order_status: 'Delivered' }
+    setDeliveries((current) => {
+      const matchingDelivery = current.find((item) => item.id === deliveryId)
+      if (matchingDelivery) {
+        setOrders((orderCurrent) =>
+          orderCurrent.map((order) =>
+            order.order_number === matchingDelivery.order_number ? { ...order, order_status: 'Delivered' } : order,
+          ),
+        )
       }
-      return order
-    }))
+
+      return current.map((item) => (item.id === deliveryId ? { ...item, delivery_status: 'Delivered' } : item))
+    })
   }
 
   const sectionContent = useMemo(() => {
@@ -741,92 +764,109 @@ function App() {
 
     if (section === 'products') {
       return (
-        <>
-          {isMobile ? (
-            <div className="card">
-              <div className="section-toolbar">
-                <h3 className="section-title">New Product</h3>
-                <button type="button" className="secondary" onClick={() => setShowProductForm((open) => !open)}>
-                  {showProductForm ? 'Hide form' : 'Add product'}
-                </button>
+        <div className="card">
+          <div className="section-toolbar" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+            <h2 style={{ margin: 0, fontSize: '1.5rem', fontWeight: '600' }}>Product Management</h2>
+            <div className="chip-row">
+              <button type="button" className="secondary" onClick={() => setShowProductForm((open) => !open)}>
+                {showProductForm ? '✕ Close' : '+ New product'}
+              </button>
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => setShowProductCatalog((open) => !open)}
+              >
+                {showProductCatalog ? '✕ Hide' : '📋 Show catalog'}
+              </button>
+            </div>
+          </div>
+
+          {showProductForm && (
+            <>
+              <div style={{ paddingBottom: '2rem', borderBottom: '1px solid #e5e7eb', marginBottom: '2rem' }}>
+                <h3 style={{ margin: '0 0 1.5rem 0', fontSize: '1.1rem', fontWeight: '600', color: '#1f2937' }}>Add New Product</h3>
+                {isMobile ? (
+                  <form onSubmit={handleCreateProduct} className="input-group mobile-product-form" encType="multipart/form-data">
+                    <input name="product_name" placeholder="Product name" />
+                    <input name="sku" placeholder="SKU" />
+                    <input name="selling_price" placeholder="Selling price" type="number" />
+                    <input name="quantity_in_stock" placeholder="Stock" type="number" />
+                    <select name="category_id" defaultValue="">
+                      <option value="" disabled>
+                        Choose category
+                      </option>
+                      {categories.map((category) => (
+                        <option key={category.id} value={category.id}>
+                          {category.category_name}
+                        </option>
+                      ))}
+                    </select>
+                    <select name="brand_id" defaultValue="">
+                      <option value="" disabled>
+                        Choose brand
+                      </option>
+                      {brands.map((brand) => (
+                        <option key={brand.id} value={brand.id}>
+                          {brand.brand_name}
+                        </option>
+                      ))}
+                    </select>
+                    <label className="file-input-label">
+                      Upload images (up to 4)
+                      <input name="images" type="file" accept="image/*" multiple />
+                    </label>
+                    <button type="submit" disabled={loading}>
+                      Create product
+                    </button>
+                  </form>
+                ) : (
+                  <form onSubmit={handleCreateProduct} className="input-group" encType="multipart/form-data">
+                    <input name="product_name" placeholder="Product name" />
+                    <input name="sku" placeholder="SKU" />
+                    <input name="barcode" placeholder="Barcode" />
+                    <input name="selling_price" placeholder="Selling price" type="number" />
+                    <input name="buying_price" placeholder="Buying price" type="number" />
+                    <input name="quantity_in_stock" placeholder="Stock" type="number" />
+                    <input name="reorder_level" placeholder="Reorder level" type="number" />
+                    <select name="category_id" defaultValue="">
+                      <option value="" disabled>
+                        Choose category
+                      </option>
+                      {categories.map((category) => (
+                        <option key={category.id} value={category.id}>
+                          {category.category_name}
+                        </option>
+                      ))}
+                    </select>
+                    <select name="brand_id" defaultValue="">
+                      <option value="" disabled>
+                        Choose brand
+                      </option>
+                      {brands.map((brand) => (
+                        <option key={brand.id} value={brand.id}>
+                          {brand.brand_name}
+                        </option>
+                      ))}
+                    </select>
+                    <input name="image_url" placeholder="Main image URL (optional)" />
+                    <label className="file-input-label">
+                      Upload images (up to 4)
+                      <input name="images" type="file" accept="image/*" multiple />
+                    </label>
+                    <textarea name="description" placeholder="Description" rows={3} />
+                    <button type="submit" disabled={loading}>
+                      Create product
+                    </button>
+                  </form>
+                )}
               </div>
-              {showProductForm ? (
-                <form onSubmit={handleCreateProduct} className="input-group mobile-product-form">
-                  <input name="product_name" placeholder="Product name" />
-                  <input name="sku" placeholder="SKU" />
-                  <input name="selling_price" placeholder="Selling price" type="number" />
-                  <input name="quantity_in_stock" placeholder="Stock" type="number" />
-                  <select name="category_id" defaultValue="">
-                    <option value="" disabled>
-                      Choose category
-                    </option>
-                    {categories.map((category) => (
-                      <option key={category.id} value={category.id}>
-                        {category.category_name}
-                      </option>
-                    ))}
-                  </select>
-                  <select name="brand_id" defaultValue="">
-                    <option value="" disabled>
-                      Choose brand
-                    </option>
-                    {brands.map((brand) => (
-                      <option key={brand.id} value={brand.id}>
-                        {brand.brand_name}
-                      </option>
-                    ))}
-                  </select>
-                  <button type="submit" disabled={loading}>
-                    Create product
-                  </button>
-                </form>
-              ) : (
-                <p className="small-text">Tap Add product to open the quick form.</p>
-              )}
-            </div>
-          ) : (
-            <div className="card">
-              <form onSubmit={handleCreateProduct} className="input-group">
-                <h3 className="section-title">New Product</h3>
-                <input name="product_name" placeholder="Product name" />
-                <input name="sku" placeholder="SKU" />
-                <input name="barcode" placeholder="Barcode" />
-                <input name="selling_price" placeholder="Selling price" type="number" />
-                <input name="buying_price" placeholder="Buying price" type="number" />
-                <input name="quantity_in_stock" placeholder="Stock" type="number" />
-                <input name="reorder_level" placeholder="Reorder level" type="number" />
-                <select name="category_id" defaultValue="">
-                  <option value="" disabled>
-                    Choose category
-                  </option>
-                  {categories.map((category) => (
-                    <option key={category.id} value={category.id}>
-                      {category.category_name}
-                    </option>
-                  ))}
-                </select>
-                <select name="brand_id" defaultValue="">
-                  <option value="" disabled>
-                    Choose brand
-                  </option>
-                  {brands.map((brand) => (
-                    <option key={brand.id} value={brand.id}>
-                      {brand.brand_name}
-                    </option>
-                  ))}
-                </select>
-                <input name="image_url" placeholder="Image URL" />
-                <textarea name="description" placeholder="Description" rows={3} />
-                <button type="submit" disabled={loading}>
-                  Create product
-                </button>
-              </form>
-            </div>
+            </>
           )}
-          <div className="card">
-            <div className="page-header">
-              <h3 className="section-title">Product catalog</h3>
-              <div className="filter-stack">
+
+          {showProductCatalog && (
+            <>
+              <h3 style={{ margin: '0 0 1.5rem 0', fontSize: '1.1rem', fontWeight: '600', color: '#1f2937' }}>Product Catalog</h3>
+              <div className="filter-stack" style={{ marginBottom: '1.5rem' }}>
                 <input
                   placeholder="Search by name, SKU, or status"
                   value={searchTerm}
@@ -859,71 +899,77 @@ function App() {
                   Search
                 </button>
               </div>
-            </div>
-            {isMobile ? (
-              <div className="mobile-card-list">
-                {filteredProducts.length > 0 ? (
-                  filteredProducts.map((product) => (
-                    <div className="mobile-card-item" key={product.id}>
-                      <div className="mobile-card-title-row">
-                        <strong>{product.product_name}</strong>
-                        <span className={`status-pill ${product.status.toLowerCase().replace(/\s+/g, '-')}`}>{product.status}</span>
+              {isMobile ? (
+                <div className="mobile-card-list">
+                  {filteredProducts.length > 0 ? (
+                    filteredProducts.map((product) => (
+                      <div className="mobile-card-item" key={product.id}>
+                        <div className="mobile-card-title-row">
+                          <strong>{product.product_name}</strong>
+                          <span className={`status-pill ${product.status.toLowerCase().replace(/\s+/g, '-')}`}>{product.status}</span>
+                        </div>
+                        <p className="small-text">{product.category?.category_name || '—'} • {product.brand?.brand_name || '—'}</p>
+                        <p className="small-text">SKU: {product.sku || '—'} • Stock: {product.quantity_in_stock}</p>
+                        <div className="mobile-card-actions">
+                          <button type="button" onClick={() => handleDeleteProduct(product.id)} className="secondary">
+                            Delete
+                          </button>
+                        </div>
                       </div>
-                      <p className="small-text">{product.category?.category_name || '—'} • {product.brand?.brand_name || '—'}</p>
-                      <p className="small-text">SKU: {product.sku || '—'} • Stock: {product.quantity_in_stock}</p>
-                      <div className="mobile-card-actions">
-                        <button type="button" onClick={() => handleDeleteProduct(product.id)} className="secondary">
-                          Delete
-                        </button>
-                      </div>
-                    </div>
-                  ))
-                ) : (
-                  <p className="small-text">No products found.</p>
-                )}
-              </div>
-            ) : (
-              <div className="table-responsive">
-                <table className="table">
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Category</th>
-                      <th>Brand</th>
-                      <th>Price</th>
-                      <th>Stock</th>
-                      <th>Status</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredProducts.length > 0 ? (
-                      filteredProducts.map((product) => (
-                        <tr key={product.id}>
-                          <td>{product.product_name}</td>
-                          <td>{product.category?.category_name}</td>
-                          <td>{product.brand?.brand_name}</td>
-                          <td>{product.selling_price.toLocaleString()}</td>
-                          <td>{product.quantity_in_stock}</td>
-                          <td>{product.status}</td>
-                          <td>
-                            <button type="button" onClick={() => handleDeleteProduct(product.id)} className="secondary">
-                              Delete
-                            </button>
-                          </td>
-                        </tr>
-                      ))
-                    ) : (
+                    ))
+                  ) : (
+                    <p className="small-text">No products found.</p>
+                  )}
+                </div>
+              ) : (
+                <div className="table-responsive">
+                  <table className="table">
+                    <thead>
                       <tr>
-                        <td colSpan={7}>No products found.</td>
+                        <th>Name</th>
+                        <th>Category</th>
+                        <th>Brand</th>
+                        <th>Price</th>
+                        <th>Stock</th>
+                        <th>Status</th>
+                        <th>Actions</th>
                       </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </>
+                    </thead>
+                    <tbody>
+                      {filteredProducts.length > 0 ? (
+                        filteredProducts.map((product) => (
+                          <tr key={product.id}>
+                            <td>{product.product_name}</td>
+                            <td>{product.category?.category_name}</td>
+                            <td>{product.brand?.brand_name}</td>
+                            <td>{product.selling_price.toLocaleString()}</td>
+                            <td>{product.quantity_in_stock}</td>
+                            <td>{product.status}</td>
+                            <td>
+                              <button type="button" onClick={() => handleDeleteProduct(product.id)} className="secondary">
+                                Delete
+                              </button>
+                            </td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan={7}>No products found.</td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+
+          {!showProductForm && !showProductCatalog && (
+            <div style={{ textAlign: 'center', padding: '3rem 1.5rem', color: '#6b7280' }}>
+              <p style={{ margin: 0, fontSize: '1rem' }}>Click the buttons above to add a new product or view your catalog.</p>
+            </div>
+          )}
+        </div>
       )
     }
 
@@ -1101,11 +1147,22 @@ function App() {
     if (section === 'orders') {
       return (
         <div className="card">
-          <div className="section-toolbar">
-            <h3 className="section-title">Orders</h3>
-            <span className="tag">{pendingOrders.length} pending</span>
+          <div className="section-toolbar" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+            <h2 style={{ margin: 0, fontSize: '1.5rem', fontWeight: '600' }}>Order Management</h2>
+            <span className="tag" style={{ fontSize: '0.875rem', padding: '0.5rem 0.75rem' }}>{pendingOrders.length} pending</span>
           </div>
-          {isMobile ? (
+
+          {error && (
+            <div style={{ padding: '1rem', marginBottom: '1.5rem', backgroundColor: '#fef3c7', border: '1px solid #fcd34d', borderRadius: '0.5rem', color: '#78350f' }}>
+              {error}
+            </div>
+          )}
+
+          {orders.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '3rem 1.5rem', color: '#6b7280' }}>
+              <p style={{ margin: 0, fontSize: '1rem' }}>No orders available.</p>
+            </div>
+          ) : isMobile ? (
             <div className="mobile-card-list">
               {orders.map((order) => (
                 <div className="mobile-card-item" key={order.id}>
@@ -1114,6 +1171,7 @@ function App() {
                     <span className={`status-pill ${order.order_status.toLowerCase().replace(/\s+/g, '-')}`}>{order.order_status}</span>
                   </div>
                   <p className="small-text">{order.customer} • {order.total_amount.toLocaleString()}</p>
+                  <p className="small-text">Payment: {order.payment_status}</p>
                   <div className="mobile-card-actions">
                     <button type="button" onClick={() => handleConfirmOrder(order.id)} className="secondary">
                       Confirm
@@ -1161,29 +1219,32 @@ function App() {
                       <td>{order.payment_status}</td>
                       <td>{order.order_status}</td>
                       <td>
-                        <button type="button" onClick={() => handleConfirmOrder(order.id)} className="secondary">
-                          Confirm
-                        </button>
-                        <button type="button" onClick={() => handleCancelOrder(order.id)} className="secondary">
-                          Cancel
-                        </button>
-                        <select
-                          defaultValue=""
-                          onChange={(event) => {
-                            if (event.target.value) {
-                              handleUpdateOrderStatus(order.id, event.target.value)
-                              event.target.value = ''
-                            }
-                          }}
-                        >
-                          <option value="">Update status</option>
-                          <option value="Confirmed">Confirmed</option>
-                          <option value="Processing">Processing</option>
-                          <option value="Packed">Packed</option>
-                          <option value="Out for Delivery">Out for Delivery</option>
-                          <option value="Delivered">Delivered</option>
-                          <option value="Cancelled">Cancelled</option>
-                        </select>
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          <button type="button" onClick={() => handleConfirmOrder(order.id)} className="secondary" style={{ fontSize: '0.875rem', padding: '0.4rem 0.8rem' }}>
+                            Confirm
+                          </button>
+                          <button type="button" onClick={() => handleCancelOrder(order.id)} className="secondary" style={{ fontSize: '0.875rem', padding: '0.4rem 0.8rem' }}>
+                            Cancel
+                          </button>
+                          <select
+                            defaultValue=""
+                            onChange={(event) => {
+                              if (event.target.value) {
+                                handleUpdateOrderStatus(order.id, event.target.value)
+                                event.target.value = ''
+                              }
+                            }}
+                            style={{ fontSize: '0.875rem', padding: '0.4rem 0.8rem' }}
+                          >
+                            <option value="">Update status</option>
+                            <option value="Confirmed">Confirmed</option>
+                            <option value="Processing">Processing</option>
+                            <option value="Packed">Packed</option>
+                            <option value="Out for Delivery">Out for Delivery</option>
+                            <option value="Delivered">Delivered</option>
+                            <option value="Cancelled">Cancelled</option>
+                          </select>
+                        </div>
                       </td>
                     </tr>
                   ))}
@@ -1230,11 +1291,16 @@ function App() {
     if (section === 'deliveries') {
       return (
         <div className="card">
-          <div className="section-toolbar">
-            <h3 className="section-title">Deliveries</h3>
-            <span className="tag">{pendingDeliveries.length} pending</span>
+          <div className="section-toolbar" style={{ justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
+            <h2 style={{ margin: 0, fontSize: '1.5rem', fontWeight: '600' }}>Delivery Management</h2>
+            <span className="tag" style={{ fontSize: '0.875rem', padding: '0.5rem 0.75rem' }}>{pendingDeliveries.length} pending</span>
           </div>
-          {isMobile ? (
+
+          {deliveries.length === 0 ? (
+            <div style={{ textAlign: 'center', padding: '3rem 1.5rem', color: '#6b7280' }}>
+              <p style={{ margin: 0, fontSize: '1rem' }}>No deliveries available.</p>
+            </div>
+          ) : isMobile ? (
             <div className="mobile-card-list">
               {deliveries.map((delivery) => (
                 <div className="mobile-card-item" key={delivery.id}>
@@ -1244,6 +1310,7 @@ function App() {
                   </div>
                   <p className="small-text">{delivery.customer}</p>
                   <p className="small-text">{delivery.delivery_address}</p>
+                  <p className="small-text">Delivery Date: {delivery.delivery_date || '—'}</p>
                   <div className="mobile-card-actions">
                     <button type="button" className="secondary" onClick={() => handleConfirmDelivery(delivery.id)}>
                       Confirm delivery
@@ -1274,7 +1341,7 @@ function App() {
                       <td>{delivery.delivery_status}</td>
                       <td>{delivery.delivery_date || '—'}</td>
                       <td>
-                        <button type="button" className="secondary" onClick={() => handleConfirmDelivery(delivery.id)}>
+                        <button type="button" className="secondary" onClick={() => handleConfirmDelivery(delivery.id)} style={{ fontSize: '0.875rem', padding: '0.4rem 0.8rem' }}>
                           Confirm delivery
                         </button>
                       </td>
@@ -1416,11 +1483,13 @@ function App() {
                           >
                             Send
                           </button>
-                          {selectedReceipt?.pdf_url ? (
-                            <a href={selectedReceipt.pdf_url} target="_blank" rel="noreferrer">
-                              <button type="button" className="primary">Download PDF</button>
-                            </a>
-                          ) : null}
+                          <button
+                            type="button"
+                            className="primary"
+                            onClick={() => selectedReceipt && downloadReceiptPdf(selectedReceipt)}
+                          >
+                            Download PDF
+                          </button>
                         </div>
                       </label>
                       {sendStatus ? <p className="small-text">{sendStatus}</p> : null}
@@ -1462,7 +1531,7 @@ function App() {
     }
 
     return <p>Section not found.</p>
-  }, [section, isLoggedIn, summary, products, categories, brands, inventory, customers, orders, payments, deliveries, receipts, reportData, searchTerm, loading, lowStockItems, pendingOrders, pendingDeliveries, alerts, filteredProducts, isMobile, showReceiptPreview, selectedReceiptId])
+  }, [section, isLoggedIn, summary, products, categories, brands, inventory, customers, orders, payments, deliveries, receipts, reportData, searchTerm, loading, lowStockItems, pendingOrders, pendingDeliveries, alerts, filteredProducts, isMobile, showProductForm, showProductCatalog, showReceiptPreview, selectedReceiptId])
 
   if (!isLoggedIn) {
     return (

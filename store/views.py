@@ -20,6 +20,12 @@ from reportlab.pdfgen import canvas
 from io import BytesIO
 from django.shortcuts import render
 from django.utils import timezone
+
+try:
+    from weasyprint import HTML, CSS
+except ImportError:
+    HTML = None
+    CSS = None
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from rest_framework import status
@@ -61,6 +67,59 @@ cloudinary.config(
     api_secret=os.getenv('CLOUDINARY_API_SECRET', ''),
     secure=True,
 )
+
+
+def build_receipt_context(receipt):
+    return {
+        'receipt': receipt,
+        'order': receipt.order,
+        'customer': receipt.order.customer.user,
+        'items': receipt.order.items.all(),
+        'company_name': 'GrowSalon',
+        'company_address': '123 Salon Lane, Kampala',
+        'company_email': 'support@growsalon.com',
+        'company_phone': '+256 700 000 000',
+    }
+
+
+def generate_receipt_pdf_bytes(receipt, request):
+    html_content = render_to_string('receipt_pdf.html', build_receipt_context(receipt))
+    if HTML is not None:
+        try:
+            css = CSS(string='''
+                body { font-family: Arial, sans-serif; margin: 0; padding: 0; color: #1f2937; }
+                .page { padding: 32px; }
+                .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 32px; }
+                .company-brand { font-size: 1.5rem; font-weight: 700; color: #1d4ed8; }
+                .subtitle { color: #475569; margin-top: 4px; }
+                .panel { border: 1px solid #e2e8f0; border-radius: 16px; padding: 18px; margin-bottom: 18px; }
+                .panel-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+                .panel h4 { margin: 0 0 8px; font-size: 0.95rem; color: #475569; }
+                .panel p { margin: 0; font-size: 0.95rem; }
+                table { width: 100%; border-collapse: collapse; margin-top: 14px; }
+                th, td { padding: 12px 10px; border: 1px solid #e2e8f0; text-align: left; }
+                th { background: #f1f5f9; }
+                .total-row td { font-weight: 700; }
+                .footer { margin-top: 24px; color: #475569; font-size: 0.92rem; }
+            ''')
+            pdf_bytes = HTML(string=html_content, base_url=request.build_absolute_uri('/')).write_pdf(stylesheets=[css])
+            return pdf_bytes
+        except Exception:
+            pass
+
+    buffer = BytesIO()
+    p = canvas.Canvas(buffer)
+    p.setFont('Helvetica-Bold', 16)
+    p.drawString(50, 800, f"{receipt.receipt_number}")
+    p.setFont('Helvetica', 11)
+    p.drawString(50, 780, f"Order: {receipt.order.order_number}")
+    p.drawString(50, 764, f"Customer: {receipt.order.customer.user.get_full_name() or receipt.order.customer.user.email}")
+    p.drawString(50, 748, f"Amount: {receipt.total_amount}")
+    p.drawString(50, 732, f"Date: {receipt.receipt_date.isoformat()}")
+    p.showPage()
+    p.save()
+    buffer.seek(0)
+    return buffer.read()
 
 
 def upload_image_to_cloudinary(uploaded_file):
@@ -486,14 +545,24 @@ class ProductListCreateAPIView(APIView):
             return Response({'detail': 'Category and brand are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
         image_url = validated.get('image_url') or ''
-        if 'image' in request.FILES:
-            uploaded = request.FILES['image']
+        image_url_2 = validated.get('image_url_2') or ''
+        image_url_3 = validated.get('image_url_3') or ''
+        image_url_4 = validated.get('image_url_4') or ''
+        uploaded_images = request.FILES.getlist('images') or []
+        if not uploaded_images and 'image' in request.FILES:
+            uploaded_images = [request.FILES['image']]
+
+        uploaded_urls = []
+        for uploaded in uploaded_images[:4]:
             uploaded_url = upload_image_to_cloudinary(uploaded)
-            if uploaded_url:
-                image_url = uploaded_url
-            else:
+            if not uploaded_url:
                 path = default_storage.save(f'products/{uploaded.name}', uploaded)
-                image_url = request.build_absolute_uri(default_storage.url(path))
+                uploaded_url = request.build_absolute_uri(default_storage.url(path))
+            if uploaded_url:
+                uploaded_urls.append(uploaded_url)
+
+        if uploaded_urls:
+            image_url, image_url_2, image_url_3, image_url_4 = (uploaded_urls + ['', '', '', ''])[:4]
 
         product = Product.objects.create(
             category=category,
@@ -507,6 +576,9 @@ class ProductListCreateAPIView(APIView):
             quantity_in_stock=validated.get('quantity_in_stock') or 0,
             reorder_level=validated.get('reorder_level') or 0,
             image_url=image_url,
+            image_url_2=image_url_2,
+            image_url_3=image_url_3,
+            image_url_4=image_url_4,
             weight=validated.get('weight'),
             unit=validated.get('unit') or '',
             status=validated.get('status') or ('Out of Stock' if (validated.get('quantity_in_stock') or 0) <= 0 else 'Available'),
@@ -596,11 +668,29 @@ class ProductDetailAPIView(APIView):
             product.reorder_level = validated['reorder_level']
         if validated.get('image_url') is not None:
             product.image_url = validated['image_url']
-        if 'image' in request.FILES:
-            uploaded = request.FILES['image']
-            uploaded_url = upload_image_to_cloudinary(uploaded)
-            if uploaded_url:
-                product.image_url = uploaded_url
+        if validated.get('image_url_2') is not None:
+            product.image_url_2 = validated['image_url_2']
+        if validated.get('image_url_3') is not None:
+            product.image_url_3 = validated['image_url_3']
+        if validated.get('image_url_4') is not None:
+            product.image_url_4 = validated['image_url_4']
+
+        uploaded_images = request.FILES.getlist('images') or []
+        if not uploaded_images and 'image' in request.FILES:
+            uploaded_images = [request.FILES['image']]
+
+        if uploaded_images:
+            uploaded_urls = []
+            for uploaded in uploaded_images[:4]:
+                uploaded_url = upload_image_to_cloudinary(uploaded)
+                if not uploaded_url:
+                    path = default_storage.save(f'products/{uploaded.name}', uploaded)
+                    uploaded_url = request.build_absolute_uri(default_storage.url(path))
+                if uploaded_url:
+                    uploaded_urls.append(uploaded_url)
+            if uploaded_urls:
+                product.image_url, product.image_url_2, product.image_url_3, product.image_url_4 = (uploaded_urls + ['', '', '', ''])[:4]
+
         if validated.get('weight') is not None:
             product.weight = validated['weight']
         if validated.get('unit') is not None:
@@ -1634,9 +1724,11 @@ class ReceiptAPIView(APIView):
                 'tax': order.tax,
                 'delivery_fee': order.delivery_fee,
                 'total_amount': order.total_amount + order.delivery_fee + order.tax,
-                'pdf_url': request.build_absolute_uri(f'/api/orders/{order.id}/receipt/'),
             },
         )
+        if not receipt.pdf_url:
+            receipt.pdf_url = request.build_absolute_uri(f'/api/admin/receipts/{receipt.id}/pdf/')
+            receipt.save(update_fields=['pdf_url'])
         return Response({
             'message': 'Receipt generated.' if created else 'Receipt already exists.',
             'receipt_number': receipt.receipt_number,
@@ -1679,45 +1771,26 @@ class AdminReceiptEmailAPIView(APIView):
         to_email = request.data.get('email')
         if not to_email:
             return Response({'detail': 'Email address is required.'}, status=status.HTTP_400_BAD_REQUEST)
-        # Build PDF in-memory and save to storage for caching
-        buffer = BytesIO()
-        p = canvas.Canvas(buffer)
-        p.setFont('Helvetica', 12)
-        p.drawString(50, 800, f"Receipt: {receipt.receipt_number}")
-        p.drawString(50, 780, f"Order: {receipt.order.order_number}")
-        p.drawString(50, 760, f"Customer: {receipt.order.customer.user.get_full_name() or receipt.order.customer.user.email}")
-        p.drawString(50, 740, f"Amount: {receipt.total_amount}")
-        p.drawString(50, 720, f"Date: {receipt.receipt_date.isoformat()}")
-        p.showPage()
-        p.save()
-        buffer.seek(0)
 
+        pdf_bytes = generate_receipt_pdf_bytes(receipt, request)
         filename = f"receipts/{receipt.receipt_number}.pdf"
         try:
-            # save to default storage
-            from django.core.files.base import ContentFile
-
-            default_storage.save(filename, ContentFile(buffer.getvalue()))
+            default_storage.save(filename, ContentFile(pdf_bytes))
             receipt.pdf_url = request.build_absolute_uri(default_storage.url(filename))
             receipt.save(update_fields=['pdf_url'])
         except Exception:
-            # ignore storage errors; we'll still attach the PDF
-            pass
+            receipt.pdf_url = request.build_absolute_uri(f'/api/admin/receipts/{receipt.id}/pdf/')
 
-        # render HTML email
         try:
-            html = render_to_string('email/receipt_email.html', {'receipt': receipt, 'order': receipt.order})
+            html = render_to_string('email/receipt_email.html', build_receipt_context(receipt))
         except Exception:
             html = f"Please find attached receipt {receipt.receipt_number}."
 
         subject = f"Receipt {receipt.receipt_number}"
         email = EmailMessage(subject=subject, body=html, to=[to_email])
         email.content_subtype = 'html'
-        # attach the generated PDF
         try:
-            # re-seek buffer and attach
-            buffer.seek(0)
-            email.attach(f"{receipt.receipt_number}.pdf", buffer.read(), 'application/pdf')
+            email.attach(f"{receipt.receipt_number}.pdf", pdf_bytes, 'application/pdf')
             email.send(fail_silently=False)
         except Exception as e:
             return Response({'detail': 'Failed to send email.', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -1733,17 +1806,8 @@ class AdminReceiptPDFAPIView(APIView):
         if not receipt:
             return Response({'detail': 'Receipt not found.'}, status=status.HTTP_404_NOT_FOUND)
 
-        buffer = BytesIO()
-        p = canvas.Canvas(buffer)
-        p.setFont('Helvetica', 12)
-        p.drawString(50, 800, f"Receipt: {receipt.receipt_number}")
-        p.drawString(50, 780, f"Order: {receipt.order.order_number}")
-        p.drawString(50, 760, f"Customer: {receipt.order.customer.user.get_full_name() or receipt.order.customer.user.email}")
-        p.drawString(50, 740, f"Amount: {receipt.total_amount}")
-        p.drawString(50, 720, f"Date: {receipt.receipt_date.isoformat()}")
-        p.showPage()
-        p.save()
-        buffer.seek(0)
+        pdf_bytes = generate_receipt_pdf_bytes(receipt, request)
+        buffer = BytesIO(pdf_bytes)
         return FileResponse(buffer, as_attachment=True, filename=f"{receipt.receipt_number}.pdf")
 
 

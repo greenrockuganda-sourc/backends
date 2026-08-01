@@ -152,11 +152,23 @@ export async function fetchReceipts(token: string) {
 }
 
 export async function sendReceiptEmail(token: string, id: number, payload: { email: string }) {
-  return request<{ message: string }>(`/api/admin/receipts/${id}/email/`, {
+  return request<{ message: string; pdf_url?: string }>(`/api/admin/receipts/${id}/email/`, {
     method: 'POST',
     headers: { ...authHeaders(token), 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   })
+}
+
+export async function fetchReceiptPdf(token: string, id: number) {
+  const response = await fetch(`${baseUrl}/api/admin/receipts/${id}/pdf/`, {
+    method: 'GET',
+    headers: authHeaders(token),
+  })
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(errorText || response.statusText)
+  }
+  return response.blob()
 }
 
 export async function fetchReports(token: string, reportType: string) {

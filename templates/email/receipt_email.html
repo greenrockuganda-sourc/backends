@@ -1,9 +1,17 @@
 <html>
-  <body>
-    <p>Hi,</p>
-    <p>Please find attached the receipt <strong>{{ receipt.receipt_number }}</strong> for order <strong>{{ order.order_number }}</strong>.</p>
-    <p>Amount: {{ receipt.total_amount }}</p>
-    <p>Date: {{ receipt.receipt_date }}</p>
-    <p>Thank you for your business.</p>
+  <body style="font-family: Arial, sans-serif; color: #1f2937;">
+    <p>Hi {{ customer.get_full_name|default:customer.email }},</p>
+    <p>Thank you for your order. Attached is receipt <strong>{{ receipt.receipt_number }}</strong> for order <strong>{{ order.order_number }}</strong>.</p>
+    <p>
+      Amount: <strong>{{ receipt.total_amount }}</strong><br />
+      Date: <strong>{{ receipt.receipt_date|date:"F j, Y" }}</strong>
+    </p>
+    {% if receipt.pdf_url %}
+    <p>
+      Download a copy anytime: <a href="{{ receipt.pdf_url }}">View PDF receipt</a>
+    </p>
+    {% endif %}
+    <p>We appreciate your business with {{ company_name }}.</p>
+    <p>Regards,<br />{{ company_name }} Support</p>
   </body>
 </html>

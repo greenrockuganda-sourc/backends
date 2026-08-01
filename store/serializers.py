@@ -94,14 +94,18 @@ class ProductSerializer(serializers.ModelSerializer):
     brand = BrandSerializer(read_only=True)
     category_id = serializers.PrimaryKeyRelatedField(source='category', queryset=Category.objects.all(), write_only=True, required=False)
     brand_id = serializers.PrimaryKeyRelatedField(source='brand', queryset=Brand.objects.all(), write_only=True, required=False)
+    image_urls = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
         fields = [
             'id', 'category', 'brand', 'category_id', 'brand_id', 'product_name', 'description', 'barcode', 'sku',
-            'buying_price', 'selling_price', 'quantity_in_stock', 'reorder_level', 'image_url', 'weight', 'unit', 'status',
+            'buying_price', 'selling_price', 'quantity_in_stock', 'reorder_level', 'image_url', 'image_url_2', 'image_url_3', 'image_url_4', 'image_urls', 'weight', 'unit', 'status',
             'created_at', 'updated_at',
         ]
+
+    def get_image_urls(self, obj):
+        return [url for url in [obj.image_url, obj.image_url_2, obj.image_url_3, obj.image_url_4] if url]
 
 
 class ProductWriteSerializer(serializers.Serializer):
@@ -116,6 +120,9 @@ class ProductWriteSerializer(serializers.Serializer):
     quantity_in_stock = serializers.IntegerField(required=False, min_value=0)
     reorder_level = serializers.IntegerField(required=False, min_value=0)
     image_url = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    image_url_2 = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    image_url_3 = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    image_url_4 = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     weight = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, allow_null=True)
     unit = serializers.CharField(required=False, allow_blank=True, allow_null=True)
     status = serializers.ChoiceField(choices=Product.STATUS_CHOICES, required=False)

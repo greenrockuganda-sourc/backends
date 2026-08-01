@@ -35,6 +35,10 @@ export interface Product {
   category: { category_name: string }
   brand: { brand_name: string }
   image_url?: string
+  image_url_2?: string
+  image_url_3?: string
+  image_url_4?: string
+  image_urls?: string[]
 }
 
 export interface Category {
