@@ -1,0 +1,27 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Reports & Analytics</h2>
+<select id="report-type">
+  <option value="sales">Sales</option>
+  <option value="orders">Orders</option>
+  <option value="products">Products</option>
+  <option value="customers">Customers</option>
+</select>
+<button type="button" onclick="loadReport()">Load report</button>
+<button type="button" onclick="downloadReport()">Export CSV</button>
+<div id="report-output" class="card" style="margin-top: 1rem;"></div>
+<script>
+  const token = localStorage.getItem('accessToken');
+  const reportType = document.getElementById('report-type');
+  const output = document.getElementById('report-output');
+  async function loadReport() {
+    const response = await fetch('/api/admin/reports/' + reportType.value + '/', { headers: { Authorization: 'Bearer ' + token } });
+    const data = await response.json();
+    output.innerHTML = '<pre>' + JSON.stringify(data, null, 2) + '</pre>';
+  }
+  window.downloadReport = function() {
+    window.open('/api/admin/reports/' + reportType.value + '/?format=csv', '_blank');
+  };
+  loadReport();
+</script>
+{% endblock %}

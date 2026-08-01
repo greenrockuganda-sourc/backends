@@ -1,0 +1,39 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Delivery Management</h2>
+<table>
+  <thead><tr><th>Order</th><th>Customer</th><th>Address</th><th>Status</th><th>Actions</th></tr></thead>
+  <tbody id="delivery-list"></tbody>
+</table>
+<script>
+  const token = localStorage.getItem('accessToken');
+  const list = document.getElementById('delivery-list');
+  async function loadDeliveries() {
+    const response = await fetch('/api/admin/deliveries/', { headers: { Authorization: 'Bearer ' + token } });
+    const data = await response.json();
+    if (!response.ok) return;
+    list.innerHTML = data.map(delivery => `
+      <tr>
+        <td>${delivery.order_number}</td>
+        <td>${delivery.customer}</td>
+        <td>${delivery.delivery_address || ''}</td>
+        <td>${delivery.delivery_status}</td>
+        <td class="actions">
+          <button type="button" onclick="updateDelivery(${delivery.id}, 'Packed')">Packed</button>
+          <button type="button" onclick="updateDelivery(${delivery.id}, 'Out for Delivery')">Out for Delivery</button>
+          <button type="button" onclick="updateDelivery(${delivery.id}, 'Delivered')">Delivered</button>
+        </td>
+      </tr>
+    `).join('');
+  }
+  window.updateDelivery = async function(id, status) {
+    const response = await fetch('/api/admin/deliveries/' + id + '/', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ delivery_status: status })
+    });
+    if (response.ok) loadDeliveries();
+  };
+  loadDeliveries();
+</script>
+{% endblock %}

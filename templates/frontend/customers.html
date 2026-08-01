@@ -1,0 +1,43 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Customer Management</h2>
+<input id="search-box" placeholder="Search customers" style="width: 100%; margin-bottom: 1rem;" />
+<table>
+  <thead><tr><th>Name</th><th>Salon</th><th>Email</th><th>Phone</th><th>Orders</th><th>Total</th><th>Status</th><th>Actions</th></tr></thead>
+  <tbody id="customer-list"></tbody>
+</table>
+<script>
+  const token = localStorage.getItem('accessToken');
+  const list = document.getElementById('customer-list');
+  const searchBox = document.getElementById('search-box');
+  async function loadCustomers() {
+    const response = await fetch('/api/admin/customers/?search=' + encodeURIComponent(searchBox.value), { headers: { Authorization: 'Bearer ' + token } });
+    const data = await response.json();
+    if (!response.ok) return;
+    list.innerHTML = data.map(customer => `
+      <tr>
+        <td>${customer.customer_name}</td>
+        <td>${customer.salon_name || ''}</td>
+        <td>${customer.email}</td>
+        <td>${customer.phone}</td>
+        <td>${customer.number_of_orders}</td>
+        <td>${customer.total_purchases}</td>
+        <td>${customer.is_active ? 'Active' : 'Disabled'}</td>
+        <td class="actions">
+          <button type="button" onclick="toggleCustomer(${customer.id}, ${customer.is_active ? 'false' : 'true'})">${customer.is_active ? 'Disable' : 'Activate'}</button>
+        </td>
+      </tr>
+    `).join('');
+  }
+  window.toggleCustomer = async function(id, isActive) {
+    const response = await fetch('/api/admin/customers/' + id + '/', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ is_active: isActive === 'true' })
+    });
+    if (response.ok) loadCustomers();
+  };
+  searchBox.addEventListener('input', loadCustomers);
+  loadCustomers();
+</script>
+{% endblock %}

@@ -1,0 +1,47 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Order Management</h2>
+<table>
+  <thead><tr><th>Order</th><th>Customer</th><th>Total</th><th>Status</th><th>Payment</th><th>Actions</th></tr></thead>
+  <tbody id="order-list"></tbody>
+</table>
+<script>
+  const token = localStorage.getItem('accessToken');
+  const list = document.getElementById('order-list');
+  async function loadOrders() {
+    const response = await fetch('/api/admin/orders/', { headers: { Authorization: 'Bearer ' + token } });
+    const data = await response.json();
+    if (!response.ok) return;
+    list.innerHTML = data.map(order => `
+      <tr>
+        <td>${order.order_number}</td>
+        <td>${order.customer}</td>
+        <td>${order.total_amount}</td>
+        <td>${order.order_status}</td>
+        <td>${order.payment_status}</td>
+        <td class="actions">
+          <button type="button" onclick="updateStatus(${order.id}, 'Confirmed')">Confirm</button>
+          <button type="button" onclick="updateStatus(${order.id}, 'Processing')">Processing</button>
+          <button type="button" onclick="cancelOrder(${order.id})">Cancel</button>
+        </td>
+      </tr>
+    `).join('');
+  }
+  window.updateStatus = async function(id, status) {
+    const response = await fetch('/api/admin/orders/' + id + '/status/', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ status })
+    });
+    if (response.ok) loadOrders();
+  };
+  window.cancelOrder = async function(id) {
+    const response = await fetch('/api/admin/orders/' + id + '/cancel/', {
+      method: 'PATCH',
+      headers: { Authorization: 'Bearer ' + token }
+    });
+    if (response.ok) loadOrders();
+  };
+  loadOrders();
+</script>
+{% endblock %}

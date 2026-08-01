@@ -1,0 +1,37 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Salon Products Admin Console</h2>
+<p>Manage your catalog, inventory, customers, orders, payments, deliveries, receipts, and reports from one place.</p>
+<div id="summary" class="grid"></div>
+<div class="grid" style="margin-top: 1rem;">
+  <div class="card"><h3>Operations</h3><p><a href="/dashboard/">View dashboard</a></p><p><a href="/products/">Manage products</a></p><p><a href="/inventory/">Update stock</a></p></div>
+  <div class="card"><h3>Catalog</h3><p><a href="/categories/">Manage categories</a></p><p><a href="/brands/">Manage brands</a></p></div>
+  <div class="card"><h3>Customers & Orders</h3><p><a href="/customers/">Manage customers</a></p><p><a href="/orders/">Review orders</a></p><p><a href="/payments/">Track payments</a></p></div>
+  <div class="card"><h3>Delivery & Reports</h3><p><a href="/deliveries/">Manage deliveries</a></p><p><a href="/receipts/">Receipt center</a></p><p><a href="/reports/">Reports & analytics</a></p></div>
+</div>
+<script>
+  const token = localStorage.getItem('accessToken');
+  const box = document.getElementById('summary');
+  async function loadSummary() {
+    if (!token) {
+      box.innerHTML = '<div class="card"><h3>Admin access</h3><p>Please log in with an admin account to view the dashboard.</p></div>';
+      return;
+    }
+    try {
+      const response = await fetch('/api/admin/dashboard/', { headers: { Authorization: 'Bearer ' + token } });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.detail || 'Unable to fetch dashboard');
+      const summary = result.summary || {};
+      box.innerHTML = [
+        ['Products', summary.total_products],
+        ['Customers', summary.total_customers],
+        ['Orders', summary.total_orders],
+        ['Revenue', '$' + Number(summary.revenue_this_month || 0).toLocaleString()]
+      ].map(([label, value]) => `<div class="card"><h3>${label}</h3><p style="font-size: 1.3rem; font-weight: bold;">${value}</p></div>`).join('');
+    } catch (error) {
+      box.innerHTML = `<div class="card"><h3>Unavailable</h3><p>${error.message}</p></div>`;
+    }
+  }
+  loadSummary();
+</script>
+{% endblock %}

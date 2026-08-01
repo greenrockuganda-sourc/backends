@@ -1,0 +1,30 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Receipt Management</h2>
+<table>
+  <thead><tr><th>Receipt</th><th>Customer</th><th>Order</th><th>Amount</th><th>Date</th><th>Actions</th></tr></thead>
+  <tbody id="receipt-list"></tbody>
+</table>
+<script>
+  const token = localStorage.getItem('accessToken');
+  const list = document.getElementById('receipt-list');
+  async function loadReceipts() {
+    const response = await fetch('/api/admin/receipts/', { headers: { Authorization: 'Bearer ' + token } });
+    const data = await response.json();
+    if (!response.ok) return;
+    list.innerHTML = data.map(receipt => `
+      <tr>
+        <td>${receipt.receipt_number}</td>
+        <td>${receipt.customer}</td>
+        <td>${receipt.order_number}</td>
+        <td>${receipt.amount}</td>
+        <td>${receipt.date}</td>
+        <td class="actions">
+          <a href="/api/receipts/${receipt.id}/download/" target="_blank">Download</a>
+        </td>
+      </tr>
+    `).join('');
+  }
+  loadReceipts();
+</script>
+{% endblock %}

@@ -1,0 +1,67 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Categories</h2>
+<form id="category-form">
+  <input name="category_name" placeholder="Category name" required>
+  <input name="description" placeholder="Description">
+  <input name="image_url" placeholder="Image URL">
+  <button type="submit">Save category</button>
+</form>
+<div id="message" class="message"></div>
+<table>
+  <thead><tr><th>Name</th><th>Description</th><th>Actions</th></tr></thead>
+  <tbody id="category-list"></tbody>
+</table>
+<script>
+  const token = localStorage.getItem('accessToken');
+  const form = document.getElementById('category-form');
+  const list = document.getElementById('category-list');
+  const message = document.getElementById('message');
+  let editingId = null;
+  function showMessage(text, type) { message.className = 'message ' + type; message.textContent = text; }
+  function resetForm() { form.reset(); editingId = null; form.querySelector('button').textContent = 'Save category'; }
+  async function loadCategories() {
+    const response = await fetch('/api/categories/', { headers: { Authorization: 'Bearer ' + token } });
+    const data = await response.json();
+    if (!response.ok) return;
+    list.innerHTML = data.map(category => `
+      <tr>
+        <td>${category.category_name}</td>
+        <td>${category.description || ''}</td>
+        <td class="actions">
+          <button type="button" onclick="editCategory(${category.id})">Edit</button>
+          <button type="button" onclick="deleteCategory(${category.id})">Delete</button>
+        </td>
+      </tr>
+    `).join('');
+  }
+  window.editCategory = async function(id) {
+    const response = await fetch('/api/categories/' + id + '/', { headers: { Authorization: 'Bearer ' + token } });
+    const category = await response.json();
+    editingId = id;
+    form.elements.category_name.value = category.category_name || '';
+    form.elements.description.value = category.description || '';
+    form.elements.image_url.value = category.image_url || '';
+    form.querySelector('button').textContent = 'Update category';
+  };
+  window.deleteCategory = async function(id) {
+    const response = await fetch('/api/categories/' + id + '/', { method: 'DELETE', headers: { Authorization: 'Bearer ' + token } });
+    const result = await response.json();
+    showMessage(result.message || 'Deleted', response.ok ? 'success' : 'error');
+    loadCategories();
+  };
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const payload = Object.fromEntries(new FormData(form).entries());
+    const response = await fetch('/api/categories/' + (editingId || ''), {
+      method: editingId ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify(payload)
+    });
+    const result = await response.json();
+    showMessage(editingId ? 'Category updated' : 'Category created', response.ok ? 'success' : 'error');
+    if (response.ok) { resetForm(); loadCategories(); }
+  });
+  loadCategories();
+</script>
+{% endblock %}
