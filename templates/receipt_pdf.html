@@ -15,33 +15,53 @@
         width: 100%;
         max-width: 900px;
         margin: 0 auto;
-        padding: 32px;
-        background: #ffffff;
+        padding: 36px;
+        background: linear-gradient(180deg, #ffffff 0%, #fcfdff 100%);
+        border: 1px solid #e5e7eb;
+        border-radius: 20px;
+        box-shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
       }
       .header {
         display: flex;
         justify-content: space-between;
         align-items: flex-start;
         gap: 24px;
+        padding-bottom: 20px;
+        border-bottom: 2px solid #ede9fe;
+      }
+      .brand-block {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+      .logo {
+        width: 78px;
+        height: 78px;
+        object-fit: contain;
+        border-radius: 18px;
+        background: #f5f3ff;
+        padding: 6px;
       }
       .brand {
-        font-size: 2rem;
-        font-weight: 700;
-        color: #1d4ed8;
+        font-size: 2.1rem;
+        font-weight: 800;
+        color: #6d28d9;
         margin: 0;
+        letter-spacing: 0.02em;
       }
       .subtitle {
-        margin: 8px 0 0;
-        color: #475569;
+        margin: 6px 0 0;
+        color: #64748b;
         line-height: 1.5;
+        font-size: 0.96rem;
       }
       .receipt-summary,
       .customer-summary {
-        margin-top: 28px;
-        padding: 22px;
+        margin-top: 24px;
+        padding: 20px 22px;
         border: 1px solid #e2e8f0;
-        border-radius: 16px;
-        background: #f8fafc;
+        border-radius: 14px;
+        background: #fafafc;
       }
       .summary-grid {
         display: grid;
@@ -51,6 +71,7 @@
       .summary-item {
         margin-bottom: 8px;
         font-size: 0.95rem;
+        color: #334155;
       }
       .summary-item strong {
         display: block;
@@ -64,22 +85,28 @@
       }
       th,
       td {
-        padding: 14px 12px;
+        padding: 13px 12px;
         border: 1px solid #e2e8f0;
         text-align: left;
         font-size: 0.95rem;
       }
       th {
-        background: #eff6ff;
-        color: #1d4ed8;
+        background: #6d28d9;
+        color: #ffffff;
         font-weight: 700;
+      }
+      tbody tr:nth-child(even) {
+        background: #faf7ff;
       }
       .total-row td {
         font-weight: 700;
         border-top: 2px solid #cbd5e1;
+        background: #f8fafc;
       }
       .footer {
-        margin-top: 32px;
+        margin-top: 28px;
+        padding-top: 16px;
+        border-top: 1px solid #e2e8f0;
         color: #475569;
         font-size: 0.9rem;
         line-height: 1.6;
@@ -89,9 +116,12 @@
   <body>
     <div class="page">
       <div class="header">
-        <div>
-          <h1 class="brand">{{ company_name }}</h1>
-          <p class="subtitle">Professional receipts and order records for your salon business.</p>
+        <div class="brand-block">
+          <img class="logo" src="/media/receipts/glow-logo.png" alt="Glow logo" />
+          <div>
+            <h1 class="brand">Glow</h1>
+            <p class="subtitle">Professional receipts and order records for your salon business.</p>
+          </div>
         </div>
         <div>
           <p class="summary-item"><strong>Receipt</strong>{{ receipt.receipt_number }}</p>

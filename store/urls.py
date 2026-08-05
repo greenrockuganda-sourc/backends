@@ -20,6 +20,7 @@ urlpatterns = [
     path('forgot-password/', views.forgot_password_screen, name='forgot_password_screen'),
     path('reset-password/', views.reset_password_screen, name='reset_password_screen'),
     path('profile/', views.profile_screen, name='profile_screen'),
+    path('track/<str:order_number>/', views.order_tracking_page, name='order_tracking'),
     path('api/banners/', views.BannerListAPIView.as_view(), name='banners'),
     path('api/categories/', views.CategoryListCreateAPIView.as_view(), name='categories'),
     path('api/products/best-sellers/', views.BestSellerProductAPIView.as_view(), name='best_sellers'),
@@ -78,4 +79,5 @@ urlpatterns = [
     path('api/admin/reports/<str:report_type>/', views.ReportAPIView.as_view(), name='admin_reports'),
     path('api/search/', views.GlobalSearchAPIView.as_view(), name='global_search'),
     path('api/receipts/<int:receipt_id>/download/', views.ReceiptDownloadAPIView.as_view(), name='receipt_download'),
+    path('api/receipts/<int:receipt_id>/print/', views.ReceiptPrintAPIView.as_view(), name='receipt_print'),
 ]

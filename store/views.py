@@ -1,12 +1,18 @@
+import base64
 import csv
 import io
+import logging
 import os
+import re
 from decimal import Decimal
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 import cloudinary
 import cloudinary.uploader
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.tokens import default_token_generator
+from django.core.cache import cache
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
 from django.db import transaction
@@ -15,6 +21,7 @@ from django.http import FileResponse, HttpResponse
 from django.template.loader import render_to_string
 from django.conf import settings
 from django.core.mail import EmailMessage
+from email.mime.image import MIMEImage
 import tempfile
 from reportlab.pdfgen import canvas
 from io import BytesIO
@@ -37,10 +44,12 @@ from rest_framework_simplejwt.views import TokenRefreshView
 
 from .models import Brand, CartItem, Category, Customer, Delivery, Notification, Order, OrderItem, OrderStatusHistory, Payment, Product, Recipe, Receipt, Review, ShoppingCart
 from .serializers import (
+    BrandSerializer,
     BrandWriteSerializer,
     CartAddSerializer,
     CartMergeSerializer,
     CartUpdateSerializer,
+    CategorySerializer,
     CategoryWriteSerializer,
     CustomerWriteSerializer,
     DeliveryUpdateSerializer,
@@ -70,16 +79,203 @@ cloudinary.config(
 
 
 def build_receipt_context(receipt):
+    customer = receipt.order.customer.user
+    items = []
+    for item in receipt.order.items.select_related('product').all():
+        product = getattr(item, 'product', None)
+        image_url = None
+        if product is not None:
+            image_url = product.image_url or product.image_url_2 or product.image_url_3 or product.image_url_4
+
+        items.append({
+            'name': item.product_name or getattr(item.product, 'product_name', 'Item'),
+            'product_name': item.product_name or getattr(item.product, 'product_name', 'Item'),
+            'product': product,
+            'quantity': item.quantity,
+            'unit_price': float(item.unit_price),
+            'subtotal': float(item.subtotal),
+            'image_url': image_url,
+        })
+
     return {
         'receipt': receipt,
         'order': receipt.order,
-        'customer': receipt.order.customer.user,
-        'items': receipt.order.items.all(),
-        'company_name': 'GrowSalon',
+        'customer': customer,
+        'customer_name': customer.get_full_name() or customer.email,
+        'items': items,
+        'company_name': 'Glow',
         'company_address': '123 Salon Lane, Kampala',
-        'company_email': 'support@growsalon.com',
+        'company_email': 'support@glow.com',
         'company_phone': '+256 700 000 000',
     }
+
+
+def _fetch_inline_images_for_email(items):
+    cid_map = {}
+    attachments = []
+
+    for index, item in enumerate(items):
+        image_url = item.get('image_url')
+        if not image_url or image_url in cid_map:
+            continue
+
+        try:
+            request = Request(image_url, headers={'User-Agent': 'Mozilla/5.0'})
+            data = urlopen(request, timeout=10).read()
+            mime_image = MIMEImage(data)
+            cid = f'product-image-{index + 1}'
+            mime_image.add_header('Content-ID', f'<{cid}>')
+            mime_image.add_header('Content-Disposition', 'inline', filename=f'product-{index + 1}.jpg')
+            attachments.append((mime_image, cid))
+            cid_map[image_url] = cid
+        except Exception:
+            continue
+
+    return cid_map, attachments
+
+
+def _generate_report_payload(report_type, start_date=None, end_date=None):
+    queryset = Order.objects.select_related('customer__user').all()
+    if start_date:
+        queryset = queryset.filter(order_date__date__gte=start_date)
+    if end_date:
+        queryset = queryset.filter(order_date__date__lte=end_date)
+
+    if report_type == 'sales':
+        payload = {
+            'total_orders': queryset.count(),
+            'total_revenue': float(queryset.aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')),
+            'orders_by_status': [{status_name: queryset.filter(order_status=status_name).count()} for status_name in ['Pending', 'Confirmed', 'Processing', 'Packed', 'Out for Delivery', 'Delivered', 'Cancelled']],
+        }
+    elif report_type == 'orders':
+        payload = {'orders': [{'id': order.id, 'order_number': order.order_number, 'status': order.order_status, 'amount': float(order.total_amount)} for order in queryset.order_by('-created_at')[:20]]}
+    elif report_type == 'products':
+        payload = {'products': [{'product_name': product.product_name, 'stock': product.quantity_in_stock, 'status': product.status} for product in Product.objects.order_by('-quantity_in_stock')[:20]]}
+    elif report_type == 'customers':
+        payload = {'customers': [{'customer_name': customer.user.get_full_name() or customer.user.email, 'orders': customer.orders.count(), 'total_spend': float(customer.orders.aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00'))} for customer in Customer.objects.select_related('user').all()[:20]]}
+    else:
+        payload = None
+
+    return payload
+
+
+def _render_report_csv(report_type, payload):
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    if report_type == 'sales':
+        writer.writerow(['metric', 'value'])
+        for key, value in payload.items():
+            writer.writerow([key, value])
+    elif report_type == 'orders':
+        writer.writerow(['id', 'order_number', 'status', 'amount'])
+        for item in payload['orders']:
+            writer.writerow([item['id'], item['order_number'], item['status'], item['amount']])
+    elif report_type == 'products':
+        writer.writerow(['product_name', 'stock', 'status'])
+        for item in payload['products']:
+            writer.writerow([item['product_name'], item['stock'], item['status']])
+    else:
+        writer.writerow(['customer_name', 'orders', 'total_spend'])
+        for item in payload['customers']:
+            writer.writerow([item['customer_name'], item['orders'], item['total_spend']])
+
+    return output.getvalue()
+
+
+def _send_report_message(to_email, report_type, payload, frequency='daily', start_date=None, end_date=None, file_format=None):
+    subject = f"{frequency.capitalize()} {report_type.capitalize()} Report"
+    html = render_to_string('email/report_email.html', {
+        'report_type': report_type,
+        'payload': payload,
+        'frequency': frequency,
+        'start_date': start_date,
+        'end_date': end_date,
+    })
+    email = EmailMessage(subject=subject, body=html, to=[to_email])
+    email.content_subtype = 'html'
+
+    if file_format in ('csv', 'excel'):
+        content = _render_report_csv(report_type, payload).encode('utf-8')
+        filename = f'{report_type}_report.{"xlsx" if file_format == "excel" else "csv"}'
+        mime_type = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' if file_format == 'excel' else 'text/csv'
+        email.attach(filename, content, mime_type)
+
+    email.send(fail_silently=False)
+
+    return email
+
+
+def ensure_receipt_for_order(order, request=None):
+    receipt, created = Receipt.objects.get_or_create(
+        order=order,
+        defaults={
+            'receipt_number': f"RCP-{order.id:06d}",
+            'receipt_date': timezone.now(),
+            'subtotal': order.total_amount,
+            'tax': order.tax,
+            'delivery_fee': order.delivery_fee,
+            'total_amount': order.total_amount + order.delivery_fee + order.tax,
+        },
+    )
+
+    if not created:
+        needs_update = False
+        if receipt.subtotal != order.total_amount:
+            receipt.subtotal = order.total_amount
+            needs_update = True
+        if receipt.tax != order.tax:
+            receipt.tax = order.tax
+            needs_update = True
+        if receipt.delivery_fee != order.delivery_fee:
+            receipt.delivery_fee = order.delivery_fee
+            needs_update = True
+        if receipt.total_amount != order.total_amount + order.delivery_fee + order.tax:
+            receipt.total_amount = order.total_amount + order.delivery_fee + order.tax
+            needs_update = True
+        if not receipt.receipt_number:
+            receipt.receipt_number = f"RCP-{order.id:06d}"
+            needs_update = True
+        if needs_update:
+            receipt.save(update_fields=['subtotal', 'tax', 'delivery_fee', 'total_amount', 'receipt_number'])
+
+    if request and not receipt.pdf_url:
+        receipt.pdf_url = request.build_absolute_uri(f'/api/admin/receipts/{receipt.id}/pdf/')
+        receipt.save(update_fields=['pdf_url'])
+
+    return receipt, created
+
+
+def build_receipt_printer_payload(receipt):
+    order = receipt.order
+    customer = order.customer.user
+    customer_name = customer.get_full_name() or customer.email
+    line_items = []
+    for item in order.items.select_related('product').all():
+        product_name = item.product_name or getattr(item.product, 'product_name', 'Item')
+        line_items.append(f"{product_name} x{item.quantity} {item.subtotal}")
+
+    lines = [
+        'GROW SALON',
+        'Professional Receipt',
+        f'Receipt: {receipt.receipt_number}',
+        f'Date: {receipt.receipt_date.strftime("%Y-%m-%d %H:%M")}',
+        f'Order: {order.order_number}',
+        f'Customer: {customer_name}',
+        f'Phone: {order.phone_number or "N/A"}',
+        '------------------------------',
+    ]
+    lines.extend(line_items or ['No items available.'])
+    lines.extend([
+        '------------------------------',
+        f'Subtotal: {receipt.subtotal}',
+        f'Tax: {receipt.tax}',
+        f'Delivery: {receipt.delivery_fee}',
+        f'Total: {receipt.total_amount}',
+        'Thank you for shopping with GrowSalon',
+        'Please come again.',
+    ])
+    return '\n'.join(lines)
 
 
 def generate_receipt_pdf_bytes(receipt, request):
@@ -143,6 +339,121 @@ def _add_order_status_history(order, status, title, detail):
     return OrderStatusHistory.objects.create(order=order, status=status, title=title, detail=detail)
 
 
+def generate_product_sku(product_name, exclude_product_id=None):
+    normalized = re.sub(r'[^A-Za-z0-9]+', '-', (product_name or '').strip()).strip('-').upper()
+    base = normalized or 'PRODUCT'
+    sku = f'SKU-{base}'
+
+    queryset = Product.objects.filter(sku=sku)
+    if exclude_product_id is not None:
+        queryset = queryset.exclude(pk=exclude_product_id)
+
+    if not queryset.exists():
+        return sku
+
+    suffix = 2
+    while True:
+        candidate = f'{sku}-{suffix}'
+        queryset = Product.objects.filter(sku=candidate)
+        if exclude_product_id is not None:
+            queryset = queryset.exclude(pk=exclude_product_id)
+        if not queryset.exists():
+            return candidate
+        suffix += 1
+
+
+def _build_tracking_url(order):
+    base_url = (getattr(settings, 'ORDER_TRACKING_BASE_URL', '') or getattr(settings, 'TRACKING_BASE_URL', '') or '').strip()
+    if not base_url:
+        return None
+    if not base_url.endswith('/'):
+        base_url = f'{base_url}/'
+    return f'{base_url}{order.order_number}'
+
+
+def _build_order_status_message(order, status):
+    tracking_url = _build_tracking_url(order)
+    tracking_text = f' Track it here: {tracking_url}' if tracking_url else ''
+
+    if status == 'Confirmed':
+        subject = 'Glow | Order confirmed'
+        message = f'Glow: your order {order.order_number} has been confirmed and is being prepared for dispatch.{tracking_text}'
+    elif status == 'Out for Delivery':
+        subject = 'Glow | Out for delivery'
+        message = f'Glow: your order {order.order_number} is on its way.{tracking_text}'
+    elif status == 'Delivered':
+        subject = 'Glow | Order delivered'
+        message = f'Glow: your order {order.order_number} has been delivered successfully. Thank you for shopping with Glow.{tracking_text}'
+    else:
+        subject = f'Glow | Order update: {status}'
+        message = f'Glow: your order {order.order_number} is now {status}.{tracking_text}'
+
+    return subject, message
+
+
+def _send_order_status_email(order, subject, message):
+    customer_user = getattr(getattr(order, 'customer', None), 'user', None)
+    to_email = getattr(customer_user, 'email', None)
+    if not to_email:
+        return False
+
+    html_content = f"""
+    <html>
+      <body style="font-family: Arial, sans-serif; color: #111827;">
+        <h2>Glow</h2>
+        <p>Hi {customer_user.get_full_name() or customer_user.email},</p>
+        <p>{message}</p>
+        <p><strong>Order Number:</strong> {order.order_number}</p>
+        <p>Thank you for shopping with Glow.</p>
+      </body>
+    </html>
+    """
+
+    try:
+        email = EmailMessage(subject=subject, body=html_content, to=[to_email])
+        email.content_subtype = 'html'
+        email.send(fail_silently=False)
+        return True
+    except Exception:
+        return False
+
+
+def _send_order_status_sms(order, message):
+    customer_user = getattr(getattr(order, 'customer', None), 'user', None)
+    phone_number = getattr(customer_user, 'phone_number', None) or getattr(order, 'phone_number', None)
+    if not phone_number:
+        return False
+
+    phone_number = str(phone_number).strip()
+    if phone_number.startswith('0'):
+        phone_number = f'+256{phone_number[1:]}'
+    elif not phone_number.startswith('+'):
+        phone_number = f'+{phone_number}'
+
+    account_sid = (getattr(settings, 'TWILIO_ACCOUNT_SID', '') or os.getenv('TWILIO_ACCOUNT_SID', '') or '').strip()
+    auth_token = (getattr(settings, 'TWILIO_AUTH_TOKEN', '') or os.getenv('TWILIO_AUTH_TOKEN', '') or '').strip()
+    from_number = (getattr(settings, 'TWILIO_PHONE_NUMBER', '') or os.getenv('TWILIO_PHONE_NUMBER', '') or '').strip()
+
+    if not account_sid or not auth_token or not from_number:
+        logging.getLogger(__name__).info('Twilio SMS credentials are not configured for order %s.', order.order_number)
+        return False
+
+    payload = urlencode({'To': phone_number, 'From': from_number, 'Body': message}).encode('utf-8')
+    auth_header = base64.b64encode(f'{account_sid}:{auth_token}'.encode('utf-8')).decode('ascii')
+    request = Request(
+        f'https://api.twilio.com/2010-04-01/Accounts/{account_sid}/Messages.json',
+        data=payload,
+        headers={'Authorization': f'Basic {auth_header}', 'Content-Type': 'application/x-www-form-urlencoded'},
+        method='POST',
+    )
+
+    try:
+        with urlopen(request, timeout=10) as response:
+            return response.status < 400
+    except Exception:
+        return False
+
+
 class IsActiveUser(BasePermission):
     def has_permission(self, request, view):
         if not IsAuthenticated().has_permission(request, view):
@@ -156,6 +467,21 @@ class IsAdminUser(BasePermission):
             return False
         role = str(getattr(request.user, 'role', '') or '').strip().lower()
         return role in {'admin', 'seller'}
+
+
+def order_tracking_page(request, order_number):
+    order = Order.objects.select_related('customer__user').filter(order_number=order_number).first()
+    if not order:
+        return render(request, 'order_tracking.html', {'order': None, 'not_found': True}, status=404)
+
+    history = order.status_history.all()
+    return render(request, 'order_tracking.html', {
+        'order': order,
+        'customer': order.customer.user,
+        'history': history,
+        'tracking_url': _build_tracking_url(order),
+        'not_found': False,
+    })
 
 
 class RegisterAPIView(APIView):
@@ -365,6 +691,11 @@ class DashboardAPIView(APIView):
 
     def get(self, request):
         today = timezone.now().date()
+        cache_key = f'dashboard:{request.user.id}:{today.isoformat()}'
+        cached_payload = cache.get(cache_key)
+        if cached_payload is not None:
+            return Response(cached_payload, status=status.HTTP_200_OK)
+
         start_of_week = today - timezone.timedelta(days=today.weekday())
         start_of_month = today.replace(day=1)
 
@@ -446,7 +777,7 @@ class DashboardAPIView(APIView):
                 'payment_date': payment.payment_date.isoformat() if payment.payment_date else None,
             })
 
-        return Response({
+        payload = {
             'summary': {
                 'total_products': total_products,
                 'total_categories': total_categories,
@@ -477,7 +808,9 @@ class DashboardAPIView(APIView):
                 'recent_customers': recent_customers,
                 'recent_payments': recent_payments,
             },
-        }, status=status.HTTP_200_OK)
+        }
+        cache.set(cache_key, payload, 300)
+        return Response(payload, status=status.HTTP_200_OK)
 
 
 class ProductListCreateAPIView(APIView):
@@ -564,13 +897,14 @@ class ProductListCreateAPIView(APIView):
         if uploaded_urls:
             image_url, image_url_2, image_url_3, image_url_4 = (uploaded_urls + ['', '', '', ''])[:4]
 
+        product_name = validated.get('product_name') or 'New Product'
         product = Product.objects.create(
             category=category,
             brand=brand,
-            product_name=validated.get('product_name') or 'New Product',
+            product_name=product_name,
             description=validated.get('description') or '',
             barcode=validated.get('barcode') or '',
-            sku=validated.get('sku') or '',
+            sku=validated.get('sku') or generate_product_sku(product_name),
             buying_price=validated.get('buying_price') or Decimal('0.00'),
             selling_price=validated.get('selling_price') or Decimal('0.00'),
             quantity_in_stock=validated.get('quantity_in_stock') or 0,
@@ -650,14 +984,17 @@ class ProductDetailAPIView(APIView):
             product.category = Category.objects.get(pk=validated['category_id'])
         if validated.get('brand_id'):
             product.brand = Brand.objects.get(pk=validated['brand_id'])
-        if validated.get('product_name') is not None:
-            product.product_name = validated['product_name']
+        product_name = validated.get('product_name')
+        if product_name is not None:
+            product.product_name = product_name
         if validated.get('description') is not None:
             product.description = validated['description']
         if validated.get('barcode') is not None:
             product.barcode = validated['barcode']
         if validated.get('sku') is not None:
             product.sku = validated['sku']
+        elif product_name is not None:
+            product.sku = generate_product_sku(product_name, exclude_product_id=product.id)
         if validated.get('buying_price') is not None:
             product.buying_price = validated['buying_price']
         if validated.get('selling_price') is not None:
@@ -727,7 +1064,7 @@ class CategoryListCreateAPIView(APIView):
 
     def get(self, request):
         categories = Category.objects.all().order_by('category_name')
-        return Response(CategoryWriteSerializer(categories, many=True).data, status=status.HTTP_200_OK)
+        return Response(CategorySerializer(categories, many=True).data, status=status.HTTP_200_OK)
 
     def post(self, request):
         serializer = CategoryWriteSerializer(data=request.data)
@@ -763,7 +1100,7 @@ class BrandListCreateAPIView(APIView):
 
     def get(self, request):
         brands = Brand.objects.all().order_by('brand_name')
-        return Response(BrandWriteSerializer(brands, many=True).data, status=status.HTTP_200_OK)
+        return Response(BrandSerializer(brands, many=True).data, status=status.HTTP_200_OK)
 
     def post(self, request):
         serializer = BrandWriteSerializer(data=request.data)
@@ -1124,52 +1461,29 @@ class ReportAPIView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request, report_type):
-        start_date = request.query_params.get('start_date')
-        end_date = request.query_params.get('end_date')
-        queryset = Order.objects.select_related('customer__user').all()
-        if start_date:
-            queryset = queryset.filter(order_date__date__gte=start_date)
-        if end_date:
-            queryset = queryset.filter(order_date__date__lte=end_date)
-
-        if report_type == 'sales':
-            payload = {
-                'total_orders': queryset.count(),
-                'total_revenue': float(queryset.aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')),
-                'orders_by_status': [{status_name: queryset.filter(order_status=status_name).count()} for status_name in ['Pending', 'Confirmed', 'Processing', 'Packed', 'Out for Delivery', 'Delivered', 'Cancelled']],
-            }
-        elif report_type == 'orders':
-            payload = {'orders': [{'id': order.id, 'order_number': order.order_number, 'status': order.order_status, 'amount': float(order.total_amount)} for order in queryset.order_by('-created_at')[:20]]}
-        elif report_type == 'products':
-            payload = {'products': [{'product_name': product.product_name, 'stock': product.quantity_in_stock, 'status': product.status} for product in Product.objects.order_by('-quantity_in_stock')[:20]]}
-        elif report_type == 'customers':
-            payload = {'customers': [{'customer_name': customer.user.get_full_name() or customer.user.email, 'orders': customer.orders.count(), 'total_spend': float(customer.orders.aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00'))} for customer in Customer.objects.select_related('user').all()[:20]]}
-        else:
+        payload = _generate_report_payload(report_type, request.query_params.get('start_date'), request.query_params.get('end_date'))
+        if payload is None:
             payload = {'detail': 'Unsupported report type.'}
 
         if request.query_params.get('format') == 'csv':
-            output = io.StringIO()
-            writer = csv.writer(output)
-            if report_type == 'sales':
-                writer.writerow(['metric', 'value'])
-                for key, value in payload.items():
-                    writer.writerow([key, value])
-            elif report_type == 'orders':
-                writer.writerow(['id', 'order_number', 'status', 'amount'])
-                for item in payload['orders']:
-                    writer.writerow([item['id'], item['order_number'], item['status'], item['amount']])
-            elif report_type == 'products':
-                writer.writerow(['product_name', 'stock', 'status'])
-                for item in payload['products']:
-                    writer.writerow([item['product_name'], item['stock'], item['status']])
-            else:
-                writer.writerow(['customer_name', 'orders', 'total_spend'])
-                for item in payload['customers']:
-                    writer.writerow([item['customer_name'], item['orders'], item['total_spend']])
-            response = HttpResponse(output.getvalue(), content_type='text/csv')
+            response = HttpResponse(_render_report_csv(report_type, payload), content_type='text/csv')
             response['Content-Disposition'] = f'attachment; filename="{report_type}_report.csv"'
             return response
         return Response(payload, status=status.HTTP_200_OK)
+
+    def post(self, request, report_type):
+        email = request.data.get('email')
+        if not email:
+            return Response({'detail': 'Email address is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        payload = _generate_report_payload(report_type, request.data.get('start_date'), request.data.get('end_date'))
+        if payload is None:
+            return Response({'detail': 'Unsupported report type.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        frequency = request.data.get('frequency', 'daily')
+        file_format = request.data.get('format')
+        _send_report_message(email, report_type, payload, frequency=frequency, start_date=request.data.get('start_date'), end_date=request.data.get('end_date'), file_format=file_format)
+        return Response({'message': 'Report email queued.'}, status=status.HTTP_200_OK)
 
 
 class GlobalSearchAPIView(APIView):
@@ -1498,6 +1812,8 @@ class CreateOrderAPIView(APIView):
             cart.status = 'Converted'
             cart.save(update_fields=['total_amount', 'status'])
 
+            ensure_receipt_for_order(order)
+
             admin_users = User.objects.filter(role='Admin', is_active=True)
             for admin_user in admin_users:
                 Notification.objects.create(
@@ -1622,6 +1938,11 @@ class AdminConfirmOrderAPIView(APIView):
             return Response({'detail': 'Only pending orders can be confirmed.'}, status=status.HTTP_400_BAD_REQUEST)
         order.order_status = 'Confirmed'
         order.save(update_fields=['order_status'])
+        ensure_receipt_for_order(order)
+        _add_order_status_history(order, 'Confirmed', 'Order confirmed', 'Your order has been confirmed and is being prepared for dispatch.')
+        subject, message = _build_order_status_message(order, 'Confirmed')
+        _send_order_status_email(order, subject, message)
+        _send_order_status_sms(order, message)
         Notification.objects.create(
             user=order.customer.user,
             title='Order confirmed',
@@ -1643,6 +1964,7 @@ class AdminUpdateOrderStatusAPIView(APIView):
             return Response({'detail': 'Order not found.'}, status=status.HTTP_404_NOT_FOUND)
         order.order_status = serializer.validated_data['status']
         order.save(update_fields=['order_status'])
+        ensure_receipt_for_order(order)
 
         if order.order_status == 'Out for Delivery':
             delivery = getattr(order, 'delivery', None)
@@ -1650,6 +1972,9 @@ class AdminUpdateOrderStatusAPIView(APIView):
                 delivery.delivery_status = 'Out for Delivery'
                 delivery.save(update_fields=['delivery_status'])
             _add_order_status_history(order, 'Out for Delivery', 'Out for delivery', 'Your order is on the way and a rider is heading to your address.')
+            subject, message = _build_order_status_message(order, 'Out for Delivery')
+            _send_order_status_email(order, subject, message)
+            _send_order_status_sms(order, message)
         elif order.order_status == 'Delivered':
             delivery = getattr(order, 'delivery', None)
             if delivery:
@@ -1657,8 +1982,14 @@ class AdminUpdateOrderStatusAPIView(APIView):
                 delivery.delivery_date = timezone.now()
                 delivery.save(update_fields=['delivery_status', 'delivery_date'])
             _add_order_status_history(order, 'Delivered', 'Delivered', 'Your order has been delivered successfully.')
+            subject, message = _build_order_status_message(order, 'Delivered')
+            _send_order_status_email(order, subject, message)
+            _send_order_status_sms(order, message)
         else:
             _add_order_status_history(order, order.order_status, f"Status updated to {order.order_status}", f"Your order is now {order.order_status}.")
+            subject, message = _build_order_status_message(order, order.order_status)
+            _send_order_status_email(order, subject, message)
+            _send_order_status_sms(order, message)
 
         Notification.objects.create(
             user=order.customer.user,
@@ -1715,25 +2046,25 @@ class ReceiptAPIView(APIView):
         if not request.user.is_staff and order.customer.user != request.user:
             return Response({'detail': 'You do not have permission to generate a receipt.'}, status=status.HTTP_403_FORBIDDEN)
 
-        receipt, created = Receipt.objects.get_or_create(
-            order=order,
-            defaults={
-                'receipt_number': f"RCP-{order.id:06d}",
-                'receipt_date': timezone.now(),
-                'subtotal': order.total_amount,
-                'tax': order.tax,
-                'delivery_fee': order.delivery_fee,
-                'total_amount': order.total_amount + order.delivery_fee + order.tax,
-            },
-        )
-        if not receipt.pdf_url:
-            receipt.pdf_url = request.build_absolute_uri(f'/api/admin/receipts/{receipt.id}/pdf/')
-            receipt.save(update_fields=['pdf_url'])
+        receipt, created = ensure_receipt_for_order(order, request=request)
         return Response({
             'message': 'Receipt generated.' if created else 'Receipt already exists.',
             'receipt_number': receipt.receipt_number,
             'pdf_url': receipt.pdf_url,
         }, status=status.HTTP_200_OK)
+
+
+class ReceiptPrintAPIView(APIView):
+    permission_classes = [IsActiveUser]
+
+    def get(self, request, receipt_id):
+        receipt = Receipt.objects.select_related('order', 'order__customer__user').filter(pk=receipt_id).first()
+        if not receipt:
+            return Response({'detail': 'Receipt not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if not request.user.is_staff and receipt.order.customer.user != request.user:
+            return Response({'detail': 'You do not have permission to print this receipt.'}, status=status.HTTP_403_FORBIDDEN)
+
+        return Response({'print_text': build_receipt_printer_payload(receipt)}, status=status.HTTP_200_OK)
 
 
 class ReceiptDownloadAPIView(APIView):
@@ -1746,17 +2077,10 @@ class ReceiptDownloadAPIView(APIView):
         if not request.user.is_staff and receipt.order.customer.user != request.user:
             return Response({'detail': 'You do not have permission to download this receipt.'}, status=status.HTTP_403_FORBIDDEN)
 
-        content = (
-            f"Receipt Number: {receipt.receipt_number}\n"
-            f"Customer: {receipt.order.customer.user.get_full_name() or receipt.order.customer.user.email}\n"
-            f"Order Number: {receipt.order.order_number}\n"
-            f"Amount: {receipt.total_amount}\n"
-            f"Date: {receipt.receipt_date.isoformat()}\n"
-        )
-        path = default_storage.save(f'receipts/{receipt.receipt_number}.txt', ContentFile(content.encode('utf-8')))
-        file_handle = default_storage.open(path, 'rb')
-        response = FileResponse(file_handle, content_type='text/plain')
-        response['Content-Disposition'] = f'attachment; filename="{receipt.receipt_number}.txt"'
+        pdf_bytes = generate_receipt_pdf_bytes(receipt, request)
+        buffer = BytesIO(pdf_bytes)
+        response = FileResponse(buffer, as_attachment=True, filename=f"{receipt.receipt_number}.pdf")
+        response['Content-Type'] = 'application/pdf'
         return response
 
 
@@ -1781,16 +2105,26 @@ class AdminReceiptEmailAPIView(APIView):
         except Exception:
             receipt.pdf_url = request.build_absolute_uri(f'/api/admin/receipts/{receipt.id}/pdf/')
 
+        context = build_receipt_context(receipt)
+        cid_map, attachments = _fetch_inline_images_for_email(context['items'])
+        for item in context['items']:
+            image_url = item.get('image_url')
+            if image_url and image_url in cid_map:
+                item['image_cid'] = cid_map[image_url]
+
         try:
-            html = render_to_string('email/receipt_email.html', build_receipt_context(receipt))
+            html = render_to_string('email/receipt_email.html', context)
         except Exception:
             html = f"Please find attached receipt {receipt.receipt_number}."
 
         subject = f"Receipt {receipt.receipt_number}"
         email = EmailMessage(subject=subject, body=html, to=[to_email])
         email.content_subtype = 'html'
+        email.mixed_subtype = 'related'
         try:
             email.attach(f"{receipt.receipt_number}.pdf", pdf_bytes, 'application/pdf')
+            for mime_image, _ in attachments:
+                email.attach(mime_image)
             email.send(fail_silently=False)
         except Exception as e:
             return Response({'detail': 'Failed to send email.', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)

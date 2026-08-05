@@ -1,0 +1,14 @@
+<html>
+  <body style="font-family: Arial, sans-serif; color: #1f2937;">
+    <p>Hello,</p>
+    <p>This is your {{ frequency|default:'daily' }} {{ report_type|capfirst }} report for {{ start_date|default:'the selected range' }}{% if end_date %} to {{ end_date }}{% endif %}.</p>
+    <ul>
+      {% for key, value in payload.items %}
+        <li><strong>{{ key|capfirst }}</strong>: {{ value }}</li>
+      {% empty %}
+        <li>No report data available.</li>
+      {% endfor %}
+    </ul>
+    <p>Regards,<br />Glow Support</p>
+  </body>
+</html>

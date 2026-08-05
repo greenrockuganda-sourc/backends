@@ -1,0 +1,5 @@
+Receipt Number: REC-1234
+Customer: Customer Example
+Order Number: ORDER-1234
+Amount: 1500.00
+Date: 2026-08-05T18:34:31.586209+00:00

@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Order Tracking</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 0; padding: 24px; background: #f8fafc; color: #0f172a; }
+      .card { max-width: 720px; margin: 0 auto; background: white; border-radius: 16px; padding: 24px; box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08); }
+      .pill { display: inline-block; padding: 6px 10px; border-radius: 999px; font-size: 0.85rem; font-weight: 700; background: #dbeafe; color: #1d4ed8; }
+      .history { margin-top: 20px; display: grid; gap: 12px; }
+      .entry { border: 1px solid #e2e8f0; border-radius: 12px; padding: 12px 14px; }
+      .muted { color: #64748b; }
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      {% if not_found %}
+        <h1>Order not found</h1>
+        <p class="muted">We could not find a tracking record for that order number.</p>
+      {% else %}
+        <h1>Track your order</h1>
+        <p><strong>Order:</strong> {{ order.order_number }}</p>
+        <p><strong>Customer:</strong> {{ customer.get_full_name|default:customer.email }}</p>
+        <p><strong>Status:</strong> <span class="pill">{{ order.order_status }}</span></p>
+        <p class="muted">You will receive email and SMS updates whenever the status changes.</p>
+
+        <div class="history">
+          {% for item in history %}
+            <div class="entry">
+              <div><strong>{{ item.title }}</strong></div>
+              <div class="muted">{{ item.detail }}</div>
+              <div class="muted">{{ item.created_at }}</div>
+            </div>
+          {% empty %}
+            <div class="entry">No tracking history has been recorded yet.</div>
+          {% endfor %}
+        </div>
+      {% endif %}
+    </div>
+  </body>
+</html>
