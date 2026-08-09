@@ -28,8 +28,8 @@ export default function Login({ onLogin }: LoginProps) {
   }
 
   return (
-    <div className="min-h-screen bg-slate-950 flex items-center justify-center px-4">
-      <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900/80 p-8 shadow-2xl shadow-black/40">
+    <div className="min-h-screen bg-slate-950 flex items-center justify-center px-4 py-6">
+      <div className="w-full max-w-md rounded-2xl border border-slate-800 bg-slate-900/80 p-6 sm:p-8 shadow-2xl shadow-black/40 slide-up">
         <div className="mb-8 flex items-center gap-3">
           <div className="rounded-xl bg-blue-600 p-3">
             <ShieldCheck className="h-6 w-6 text-white" />
@@ -71,7 +71,7 @@ export default function Login({ onLogin }: LoginProps) {
           </div>
 
           {error && (
-            <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+            <div className="rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-sm text-blue-300">
               {error}
             </div>
           )}

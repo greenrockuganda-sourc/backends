@@ -63,4 +63,10 @@ export interface Receipt {
   customer: string
   amount: number
   date: string
+  items?: Array<{
+    product_name: string
+    quantity: number
+    unit_price: number
+    subtotal: number
+  }>
 }

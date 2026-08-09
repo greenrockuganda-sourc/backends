@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Plus, Search } from 'lucide-react'
+import { Plus, Search, PackageOpen, Filter, X, Download } from 'lucide-react'
 import { fetchProducts, getCategories, getBrands, createProduct, updateProduct, deleteProduct } from '@/lib/api'
 import { Product, Category, Brand } from '@/types'
 import { notifyError, notifySuccess } from '@/lib/notify'
 import ConfirmationModal from '@/components/ConfirmationModal'
+import { SkeletonTable } from '@/components/Skeleton'
+import ErrorMessage from '@/components/ErrorMessage'
 
 interface ProductsProps {
   token: string
@@ -37,6 +39,35 @@ export default function Products({ token }: ProductsProps) {
   const [visibleProducts, setVisibleProducts] = useState(25)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [categoryFilter, setCategoryFilter] = useState('')
+  const [brandFilter, setBrandFilter] = useState('')
+  const [stockFilter, setStockFilter] = useState('all')
+  const [showAdvancedFilters, setShowAdvancedFilters] = useState(false)
+  
+  const filteredProducts = useMemo(() => {
+    let filtered = products
+
+    if (categoryFilter) {
+      filtered = filtered.filter((p) => p.category === categories.find(c => c.id === categoryFilter)?.category_name)
+    }
+
+    if (brandFilter) {
+      filtered = filtered.filter((p) => {
+        const brand = brands.find(b => b.id === brandFilter)
+        return brand && p.name?.toLowerCase().includes(brand.brand_name.toLowerCase())
+      })
+    }
+
+    if (stockFilter === 'low') {
+      filtered = filtered.filter((p) => p.stock > 0 && p.stock <= 10)
+    } else if (stockFilter === 'out') {
+      filtered = filtered.filter((p) => p.stock === 0)
+    } else if (stockFilter === 'available') {
+      filtered = filtered.filter((p) => p.stock > 10)
+    }
+
+    return filtered
+  }, [products, categoryFilter, brandFilter, stockFilter, categories, brands])
 
   useEffect(() => {
     const handler = window.setTimeout(() => {
@@ -92,7 +123,7 @@ export default function Products({ token }: ProductsProps) {
     return () => {
       active = false
     }
-  }, [token, debouncedSearch])
+  }, [token, debouncedSearch, categoryFilter, brandFilter, stockFilter])
 
   useEffect(() => {
     let active = true
@@ -362,10 +393,10 @@ export default function Products({ token }: ProductsProps) {
   }, [formImagePreviews])
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
+    <div className="p-3 sm:p-6 lg:p-8">
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-6 sm:mb-8">
         <div>
-          <h2 className="text-3xl font-bold text-gray-900">Products</h2>
+          <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">Products</h2>
           <p className="text-gray-500 mt-1">Manage your inventory</p>
         </div>
         <button
@@ -385,7 +416,7 @@ export default function Products({ token }: ProductsProps) {
             }
             setShowForm(!showForm)
           }}
-          className="flex items-center gap-2 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+          className="flex items-center justify-center gap-2 bg-blue-600 text-white px-4 py-2.5 rounded-lg hover:bg-blue-700 transition-colors w-full sm:w-auto"
         >
           <Plus size={20} />
           Add Product
@@ -393,30 +424,30 @@ export default function Products({ token }: ProductsProps) {
       </div>
 
       {showForm && (
-        <div className="bg-white rounded-lg border border-gray-200 p-6 mb-8">
+        <div className="bg-white rounded-lg border border-gray-200 p-4 sm:p-6 mb-6 sm:mb-8 slide-up">
           <h3 className="text-lg font-bold text-gray-900 mb-4">Add New Product</h3>
           <form onSubmit={handleProductSave} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <input value={formName} onChange={(e) => setFormName(e.target.value)} type="text" placeholder="Product Name" className="border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-2 text-sm text-gray-600">
+            <input value={formName} onChange={(e) => setFormName(e.target.value)} type="text" placeholder="Product Name" className="border border-gray-300 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <div className="rounded-lg border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm text-gray-600">
               SKU will be generated automatically from the product name.
             </div>
-            <input value={formPrice === '' ? '' : formPrice} onChange={(e) => setFormPrice(e.target.value === '' ? '' : Number(e.target.value))} type="number" placeholder="Price" className="border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            <input value={formStock === '' ? '' : formStock} onChange={(e) => setFormStock(e.target.value === '' ? '' : Number(e.target.value))} type="number" placeholder="Stock" className="border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            <select value={formCategoryId} onChange={(e) => setFormCategoryId(e.target.value)} className="border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <input value={formPrice === '' ? '' : formPrice} onChange={(e) => setFormPrice(e.target.value === '' ? '' : Number(e.target.value))} type="number" placeholder="Price" className="border border-gray-300 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <input value={formStock === '' ? '' : formStock} onChange={(e) => setFormStock(e.target.value === '' ? '' : Number(e.target.value))} type="number" placeholder="Stock" className="border border-gray-300 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <select value={formCategoryId} onChange={(e) => setFormCategoryId(e.target.value)} className="border border-gray-300 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500">
               <option value="">Select category</option>
               {categories.map((category) => (
                 <option key={category.id} value={category.id}>{category.category_name}</option>
               ))}
             </select>
-            <select value={formBrandId} onChange={(e) => setFormBrandId(e.target.value)} className="border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <select value={formBrandId} onChange={(e) => setFormBrandId(e.target.value)} className="border border-gray-300 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500">
               <option value="">Select brand</option>
               {brands.map((brand) => (
                 <option key={brand.id} value={brand.id}>{brand.brand_name}</option>
               ))}
             </select>
-            <textarea value={formDescription} onChange={(e) => setFormDescription(e.target.value)} placeholder="Description" className="md:col-span-2 border border-gray-300 rounded-lg px-4 py-2 h-24 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            <input value={formCostPrice === '' ? '' : formCostPrice} onChange={(e) => setFormCostPrice(e.target.value === '' ? '' : Number(e.target.value))} type="number" placeholder="Cost Price" className="border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
-            <input value={formReorderLevel === '' ? '' : formReorderLevel} onChange={(e) => setFormReorderLevel(e.target.value === '' ? '' : Number(e.target.value))} type="number" placeholder="Reorder Level" className="border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <textarea value={formDescription} onChange={(e) => setFormDescription(e.target.value)} placeholder="Description" className="md:col-span-2 border border-gray-300 rounded-lg px-4 py-2.5 h-24 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <input value={formCostPrice === '' ? '' : formCostPrice} onChange={(e) => setFormCostPrice(e.target.value === '' ? '' : Number(e.target.value))} type="number" placeholder="Cost Price" className="border border-gray-300 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500" />
+            <input value={formReorderLevel === '' ? '' : formReorderLevel} onChange={(e) => setFormReorderLevel(e.target.value === '' ? '' : Number(e.target.value))} type="number" placeholder="Reorder Level" className="border border-gray-300 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500" />
             <div className="md:col-span-2">
               <label className="block text-sm font-medium text-gray-700">Upload images (up to 4)</label>
               <input
@@ -435,7 +466,7 @@ export default function Products({ token }: ProductsProps) {
                 }}
                 className="mt-1"
               />
-                <div className="mt-2 grid grid-cols-4 gap-2">
+                <div className="mt-2 grid grid-cols-2 sm:grid-cols-4 gap-2">
                   {formImagePreviews.slice(0, 4).map((preview, idx) => (
                     <div key={preview} className="flex flex-col items-center gap-1">
                       <img src={preview} alt={`preview-${idx}`} className="h-20 w-20 object-cover rounded" />
@@ -444,7 +475,7 @@ export default function Products({ token }: ProductsProps) {
                       </div>
                       <div className="text-xs text-gray-600">{imageUploadProgress[idx] ?? 0}%</div>
                       {imageUploadErrors[idx] ? (
-                        <div className="text-xs text-red-600 text-center">
+                        <div className="text-xs text-blue-600 text-center">
                           <div className="truncate max-w-[80px]">{imageUploadErrors[idx]}</div>
                           <button type="button" onClick={async () => {
                             // retry single file
@@ -477,13 +508,13 @@ export default function Products({ token }: ProductsProps) {
                 </div>
                 {uploadingImages && <p className="text-sm text-gray-500">Uploading images... ({imageUploadProgress.length ? Math.round(imageUploadProgress.reduce((a,b)=>a+b,0)/imageUploadProgress.length) : 0}% avg)</p>}
             </div>
-            <select value={formStatus} onChange={(e) => setFormStatus(e.target.value as 'Available' | 'Out of Stock')} className="border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+            <select value={formStatus} onChange={(e) => setFormStatus(e.target.value as 'Available' | 'Out of Stock')} className="border border-gray-300 rounded-lg px-4 py-2.5 focus:outline-none focus:ring-2 focus:ring-blue-500">
               <option value="Available">Available</option>
               <option value="Out of Stock">Out of Stock</option>
             </select>
-            <div className="md:col-span-2 flex gap-2">
-              <button type="submit" className="flex-1 bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition-colors">Save Product</button>
-                      <button type="button" onClick={() => { setShowForm(false); setFormName(''); setFormPrice(''); setFormStock(''); setFormCategoryId(''); setFormBrandId(''); setFormDescription(''); setFormCostPrice(''); setFormReorderLevel(''); setFormImageFiles([]); setFormStatus('Available') }} className="flex-1 border border-gray-300 text-gray-700 py-2 rounded-lg hover:bg-gray-50 transition-colors">Cancel</button>
+            <div className="md:col-span-2 flex flex-col sm:flex-row gap-2">
+              <button type="submit" className="flex-1 bg-blue-600 text-white py-2.5 rounded-lg hover:bg-blue-700 transition-colors">Save Product</button>
+                      <button type="button" onClick={() => { setShowForm(false); setFormName(''); setFormPrice(''); setFormStock(''); setFormCategoryId(''); setFormBrandId(''); setFormDescription(''); setFormCostPrice(''); setFormReorderLevel(''); setFormImageFiles([]); setFormStatus('Available') }} className="flex-1 border border-gray-300 text-gray-700 py-2.5 rounded-lg hover:bg-gray-50 transition-colors">Cancel</button>
             </div>
           </form>
         </div>
@@ -497,20 +528,164 @@ export default function Products({ token }: ProductsProps) {
             placeholder="Search products..."
             value={searchTerm}
             onChange={(event) => setSearchTerm(event.target.value)}
-            className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
       </div>
 
-      {error && (
-        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
+      {error ? (
+        <ErrorMessage
+          message={error}
+          onRetry={() => {
+            setError(null)
+            window.location.reload()
+          }}
+        />
+      ) : null}
+
+      <div className="mb-6 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            const rows: string[] = []
+            rows.push('Product Name,Category,SKU,Price,Stock,Profit')
+            filteredProducts.forEach((product) => {
+              rows.push([
+                product.name,
+                product.category,
+                product.sku,
+                product.price.toFixed(2),
+                product.stock,
+                (product.profit ?? 0).toFixed(2),
+              ].map((field) => `"${String(field).replace(/"/g, '""')}"`).join(','))
+            })
+            const blob = new Blob([rows.join('\r\n')], { type: 'text/csv;charset=utf-8;' })
+            const url = window.URL.createObjectURL(blob)
+            const link = document.createElement('a')
+            link.href = url
+            link.setAttribute('download', `products-${Date.now()}.csv`)
+            document.body.appendChild(link)
+            link.click()
+            link.remove()
+            window.URL.revokeObjectURL(url)
+            notifySuccess('Products exported to CSV')
+          }}
+          className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
+        >
+          <Download size={16} />
+          Export CSV
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            const rows: string[] = []
+            rows.push('Product Name,Category,SKU,Price,Stock,Profit')
+            filteredProducts.forEach((product) => {
+              rows.push([
+                product.name,
+                product.category,
+                product.sku,
+                product.price.toFixed(2),
+                product.stock,
+                (product.profit ?? 0).toFixed(2),
+              ].map((field) => `"${String(field).replace(/"/g, '""')}"`).join(','))
+            })
+            const blob = new Blob([rows.join('\r\n')], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8;' })
+            const url = window.URL.createObjectURL(blob)
+            const link = document.createElement('a')
+            link.href = url
+            link.setAttribute('download', `products-${Date.now()}.xlsx`)
+            document.body.appendChild(link)
+            link.click()
+            link.remove()
+            window.URL.revokeObjectURL(url)
+            notifySuccess('Products exported to Excel')
+          }}
+          className="inline-flex items-center gap-2 rounded-lg border border-blue-300 bg-white px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50 transition-colors"
+        >
+          <Download size={16} />
+          Export Excel
+        </button>
+      </div>
+
+      <div className="mb-6 flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
+          className="inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+        >
+          <Filter size={16} />
+          Advanced Filters
+          {(categoryFilter || brandFilter || stockFilter !== 'all') && (
+            <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs text-blue-700">Active</span>
+          )}
+        </button>
+        {(categoryFilter || brandFilter || stockFilter !== 'all') && (
+          <button
+            type="button"
+            onClick={() => {
+              setCategoryFilter('')
+              setBrandFilter('')
+              setStockFilter('all')
+            }}
+            className="inline-flex items-center gap-1 rounded-lg text-sm text-blue-600 hover:text-blue-700"
+          >
+            <X size={16} />
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      {showAdvancedFilters && (
+        <div className="mb-6 rounded-lg border border-gray-200 bg-white p-4 sm:p-6 slide-up">
+          <h3 className="text-sm font-semibold text-gray-900 mb-4">Advanced Filters</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Category</label>
+              <select
+                value={categoryFilter}
+                onChange={(e) => setCategoryFilter(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">All categories</option>
+                {categories.map((cat) => (
+                  <option key={cat.id} value={cat.id}>{cat.category_name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Brand</label>
+              <select
+                value={brandFilter}
+                onChange={(e) => setBrandFilter(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="">All brands</option>
+                {brands.map((brand) => (
+                  <option key={brand.id} value={brand.id}>{brand.brand_name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Stock Status</label>
+              <select
+                value={stockFilter}
+                onChange={(e) => setStockFilter(e.target.value)}
+                className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="all">All stock levels</option>
+                <option value="low">Low stock (≤ 10)</option>
+                <option value="out">Out of stock</option>
+                <option value="available">In stock</option>
+              </select>
+            </div>
+          </div>
         </div>
       )}
 
       <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full">
+          <table className="responsive-table w-full">
             <thead className="bg-gray-50 border-b border-gray-200">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Product</th>
@@ -522,71 +697,86 @@ export default function Products({ token }: ProductsProps) {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
-              {!loading && products.length === 0 && (
+              {loading ? (
                 <tr>
-                  <td colSpan={6} className="px-6 py-8 text-center text-sm text-gray-500">No products found.</td>
+                  <td colSpan={6}>
+                    <div className="px-4">
+                      <SkeletonTable rows={5} columns={6} />
+                    </div>
+                  </td>
                 </tr>
+              ) : !loading && products.length === 0 ? (
+                <tr>
+                  <td colSpan={6}>
+                    <div className="flex flex-col items-center justify-center px-4 py-12">
+                      <PackageOpen size={48} className="text-gray-400 mb-3" />
+                      <p className="text-sm font-medium text-gray-900">No products found</p>
+                      <p className="text-sm text-gray-500 mt-1">Add your first product to get started.</p>
+                    </div>
+                  </td>
+                </tr>
+              ) : (
+                filteredProducts.slice(0, visibleProducts).map((product: Product) => (
+                  <tr key={product.id} className="hover:bg-gray-50 transition-colors">
+                    <td data-label="Product" className="px-6 py-4 text-sm">
+                      <div className="font-medium text-gray-900">{product.name}</div>
+                      <div className="text-xs text-gray-500">{product.category}</div>
+                    </td>
+                    <td data-label="Cost Price" className="px-6 py-4 text-sm text-gray-700">UGX {product.costPrice?.toFixed(2) ?? '0.00'}</td>
+                    <td data-label="Price" className="px-6 py-4 text-sm font-medium text-gray-900">UGX {product.price.toFixed(2)}</td>
+                    <td data-label="Stock" className="px-6 py-4 text-sm">
+                      <span className={`px-3 py-1 rounded-full text-xs font-medium ${product.stock < 10 ? 'bg-blue-100 text-blue-800' : 'bg-blue-100 text-blue-800'}`}>
+                        {product.stock} units
+                      </span>
+                    </td>
+                    <td data-label="Profit" className="px-6 py-4 text-sm">
+                      <span className={`font-semibold text-blue-700`}>
+                        {((product.profit ?? 0) >= 0 ? 'UGX ' : '-UGX ')}{Math.abs(product.profit ?? 0).toFixed(2)}
+                      </span>
+                    </td>
+                    <td data-label="Actions" className="px-6 py-4 text-sm relative">
+                      <button
+                        type="button"
+                        onClick={() => setOpenActionMenu((prev) => (prev === product.id ? null : product.id))}
+                        className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                      >
+                        Actions
+                      </button>
+                      {openActionMenu === product.id && (
+                        <div className="absolute right-0 z-10 mt-2 w-32 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              handleEditProduct(product.id)
+                              setOpenActionMenu(null)
+                            }}
+                            className="w-full px-4 py-2 text-left text-sm text-blue-600 hover:bg-gray-50"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => confirmDeleteProduct(product)}
+                            className="w-full px-4 py-2 text-left text-sm text-blue-600 hover:bg-gray-50"
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))
               )}
-              {products.slice(0, visibleProducts).map((product) => (
-                <tr key={product.id} className="hover:bg-gray-50 transition-colors">
-                  <td className="px-6 py-4 text-sm">
-                    <div className="font-medium text-gray-900">{product.name}</div>
-                    <div className="text-xs text-gray-500">{product.category}</div>
-                  </td>
-                  <td className="px-6 py-4 text-sm text-gray-700">UGX {product.costPrice?.toFixed(2) ?? '0.00'}</td>
-                  <td className="px-6 py-4 text-sm font-medium text-gray-900">UGX {product.price.toFixed(2)}</td>
-                  <td className="px-6 py-4 text-sm">
-                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${product.stock < 10 ? 'bg-red-100 text-red-800' : 'bg-green-100 text-green-800'}`}>
-                      {product.stock} units
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-sm">
-                    <span className={`font-semibold ${((product.profit ?? 0) >= 0) ? 'text-green-700' : 'text-red-700'}`}>
-                      {((product.profit ?? 0) >= 0 ? 'UGX ' : '-UGX ')}{Math.abs(product.profit ?? 0).toFixed(2)}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-sm relative">
-                    <button
-                      type="button"
-                      onClick={() => setOpenActionMenu((prev) => (prev === product.id ? null : product.id))}
-                      className="inline-flex items-center justify-center rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-blue-500"
-                    >
-                      Actions
-                    </button>
-                    {openActionMenu === product.id && (
-                      <div className="absolute right-0 z-10 mt-2 w-32 overflow-hidden rounded-lg border border-gray-200 bg-white shadow-lg">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            handleEditProduct(product.id)
-                            setOpenActionMenu(null)
-                          }}
-                          className="w-full px-4 py-2 text-left text-sm text-blue-600 hover:bg-gray-50"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => confirmDeleteProduct(product)}
-                          className="w-full px-4 py-2 text-left text-sm text-red-600 hover:bg-gray-50"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    )}
-                  </td>
-                </tr>
-              ))}
             </tbody>
           </table>
         </div>
       </div>
-      {products.length > visibleProducts && (
+      {filteredProducts.length > visibleProducts && (
         <div className="mt-4 flex justify-center">
           <button
             type="button"
             onClick={() => setVisibleProducts((prev) => prev + 25)}
-            className="inline-flex items-center justify-center rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 transition-colors"
+            className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-blue-700 transition-colors"
           >
             Load more products
           </button>

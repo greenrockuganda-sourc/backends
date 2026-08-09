@@ -210,8 +210,8 @@ export default function Reports({ token }: ReportsProps) {
   }
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8">
-      <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+    <div className="p-3 sm:p-6 lg:p-8">
+      <div className="mb-6 sm:mb-8 flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h2 className="text-3xl font-bold text-gray-900">Reports</h2>
           <p className="text-gray-500 mt-1">Export or email scheduled summaries to keep your operations on track.</p>
@@ -229,7 +229,7 @@ export default function Reports({ token }: ReportsProps) {
           <button
             type="button"
             onClick={() => handleDownloadReport('csv')}
-            className="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-700 transition-colors"
+            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
           >
             <Download size={16} />
             Download CSV
@@ -237,7 +237,7 @@ export default function Reports({ token }: ReportsProps) {
           <button
             type="button"
             onClick={() => handleDownloadReport('excel')}
-            className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-900 hover:bg-slate-50 transition-colors"
+            className="inline-flex items-center gap-2 rounded-lg border border-blue-300 bg-white px-4 py-2 text-sm font-medium text-blue-700 hover:bg-blue-50 transition-colors"
           >
             <Download size={16} />
             Download Excel
@@ -247,7 +247,7 @@ export default function Reports({ token }: ReportsProps) {
 
       <div className="grid gap-4 lg:grid-cols-[1.4fr_0.6fr]">
         <div className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2">
+          <div className="grid gap-4 grid-cols-1 sm:grid-cols-2">
             <label className="block text-sm font-medium text-gray-700">
               Start date
               <input
@@ -269,7 +269,7 @@ export default function Reports({ token }: ReportsProps) {
           </div>
 
           {error ? (
-            <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">{error}</div>
+            <div className="rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700">{error}</div>
           ) : null}
 
           {loading ? (
@@ -321,7 +321,7 @@ export default function Reports({ token }: ReportsProps) {
               <button
                 type="button"
                 onClick={handleSendEmail}
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-sm font-semibold text-white hover:bg-slate-800 transition-colors"
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white hover:bg-blue-700 transition-colors"
               >
                 <Send size={16} />
                 Send Report Email
