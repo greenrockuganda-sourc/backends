@@ -5,6 +5,7 @@ import RecentOrders from '@/components/RecentOrders'
 import InventoryStatus from '@/components/InventoryStatus'
 import { fetchDashboard, fetchProducts, fetchOrders, fetchDeliveries } from '@/lib/api'
 import { Order, Product } from '@/types'
+import Skeleton, { SkeletonStats, SkeletonTable } from '@/components/Skeleton'
 
 const validRanges = ['7d', '30d', '90d', 'all'] as const
 
@@ -42,6 +43,7 @@ export default function Dashboard({ token, user }: DashboardProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [range, setRange] = useState<RangeKey>(readDashboardRangeFromUrl)
+  const [isMobileView, setIsMobileView] = useState(false)
 
   const dateRangeLabel = useMemo(() => {
     switch (range) {
@@ -125,7 +127,7 @@ export default function Dashboard({ token, user }: DashboardProps) {
           date: order.created_at?.slice(0, 10) ?? order.date ?? '',
         }))
         const filteredRecentOrders = rangeStart
-          ? normalizedOrders.filter((order) => {
+          ? normalizedOrders.filter((order: any) => {
               const dateValue = order.date
               const orderDate = new Date(dateValue)
               return !Number.isNaN(orderDate.getTime()) && orderDate >= rangeStart
@@ -187,11 +189,24 @@ export default function Dashboard({ token, user }: DashboardProps) {
     window.history.replaceState(null, '', `${window.location.pathname}?${params.toString()}`)
   }, [range])
 
+  useEffect(() => {
+    const updateIsMobileView = () => {
+      setIsMobileView(window.innerWidth < 1024)
+    }
+
+    updateIsMobileView()
+    window.addEventListener('resize', updateIsMobileView)
+
+    return () => {
+      window.removeEventListener('resize', updateIsMobileView)
+    }
+  }, [])
+
   const firstName = user?.first_name || user?.email?.split('@')[0] || 'there'
 
   return (
-    <div className="w-full p-4 sm:p-6 lg:p-8">
-      <div className="mb-8 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+    <div className="w-full p-3 sm:p-6 lg:p-8">
+      <div className="mb-6 sm:mb-8 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
         <div className="max-w-2xl">
           <h2 className="text-2xl font-bold text-gray-900 sm:text-3xl">Welcome back, {firstName}!</h2>
           <p className="mt-1 text-sm text-gray-500 sm:text-base">Here is what is happening with your store right now.</p>
@@ -215,70 +230,96 @@ export default function Dashboard({ token, user }: DashboardProps) {
         Showing dashboard metrics for <strong>{dateRangeLabel}</strong>. Use this filter to check performance across different periods.
       </div>
 
-      <div className="mb-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="mb-8 grid gap-3 sm:gap-4 grid-cols-1 sm:grid-cols-2 xl:grid-cols-3">
         <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
           <p className="text-xs uppercase tracking-wide text-gray-500">Orders in range</p>
-          <p className="mt-2 text-3xl font-semibold text-gray-900">{recentOrders.length}</p>
+          <p className="mt-2 text-2xl sm:text-3xl font-semibold text-gray-900">{recentOrders.length}</p>
         </div>
         <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
           <p className="text-xs uppercase tracking-wide text-gray-500">Range revenue</p>
-          <p className="mt-2 text-3xl font-semibold text-gray-900">UGX {recentOrders.reduce((sum, order) => sum + order.amount, 0).toFixed(2)}</p>
+          <p className="mt-2 text-2xl sm:text-3xl font-semibold text-gray-900">UGX {recentOrders.reduce((sum, order) => sum + order.amount, 0).toFixed(2)}</p>
         </div>
         <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
           <p className="text-xs uppercase tracking-wide text-gray-500">Average order</p>
-          <p className="mt-2 text-3xl font-semibold text-gray-900">UGX {recentOrders.length ? (recentOrders.reduce((sum, order) => sum + order.amount, 0) / recentOrders.length).toFixed(2) : '0.00'}</p>
+          <p className="mt-2 text-2xl sm:text-3xl font-semibold text-gray-900">UGX {recentOrders.length ? (recentOrders.reduce((sum, order) => sum + order.amount, 0) / recentOrders.length).toFixed(2) : '0.00'}</p>
         </div>
       </div>
 
       {error && (
-        <div className="mb-6 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+        <div className="mb-6 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-700">
           {error}
         </div>
       )}
 
-      <div className="mb-8 grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard
-          title="Total Revenue"
-          value={`UGX ${stats.revenue.toFixed(2)}`}
-          icon={<DollarSign size={24} />}
-          change="Live from the API"
-          trend="up"
-          color="blue"
-        />
-        <StatCard
-          title="Total Orders"
-          value={stats.orders.toString()}
-          icon={<ShoppingCart size={24} />}
-          change="Updated now"
-          trend="up"
-          color="green"
-        />
-        <StatCard
-          title="Pending Deliveries"
-          value={stats.pending.toString()}
-          icon={<Truck size={24} />}
-          change="In progress"
-          trend="down"
-          color="orange"
-        />
-        <StatCard
-          title="Low Stock Items"
-          value={stats.lowStock.toString()}
-          icon={<AlertCircle size={24} />}
-          change="Needs attention"
-          color="red"
-        />
-      </div>
+      {loading ? (
+        <>
+          <div className="mb-8">
+            <SkeletonStats />
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:gap-6 xl:grid-cols-3">
+            <div className="xl:col-span-2">
+              <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+                <Skeleton height={20} width="40%" className="mb-4" />
+                <SkeletonTable rows={5} columns={4} />
+              </div>
+            </div>
+            <div className="xl:col-span-1">
+              <div className="rounded-lg border border-gray-200 bg-white p-6 shadow-sm">
+                <Skeleton height={20} width="60%" className="mb-4" />
+                <SkeletonTable rows={5} columns={2} />
+              </div>
+            </div>
+          </div>
+        </>
+      ) : (
+        <>
+          <div className="mb-8 grid grid-cols-1 gap-3 sm:grid-cols-2 sm:gap-4 xl:grid-cols-4">
+            <StatCard
+              title="Total Revenue"
+              value={`UGX ${stats.revenue.toFixed(2)}`}
+              icon={<DollarSign size={24} />}
+              change="Live from the API"
+              trend="up"
+              color="blue"
+            />
+              <StatCard
+                title="Total Orders"
+                value={stats.orders.toString()}
+                icon={<ShoppingCart size={24} />}
+                change="Updated now"
+                trend="up"
+                color="blue"
+              />
+              <StatCard
+                title="Pending Deliveries"
+                value={stats.pending.toString()}
+                icon={<Truck size={24} />}
+                change="In progress"
+                trend="down"
+                color="blue"
+              />
+              <StatCard
+                title="Low Stock Items"
+                value={stats.lowStock.toString()}
+                icon={<AlertCircle size={24} />}
+                change="Needs attention"
+                color="blue"
+              />
+          </div>
 
-      <div className="grid grid-cols-1 gap-6 xl:grid-cols-3">
-        <div className="xl:col-span-2">
-          <RecentOrders orders={recentOrders} loading={loading} />
-        </div>
+          <div className="grid grid-cols-1 gap-4 sm:gap-6 xl:grid-cols-3">
+            <div className="xl:col-span-2">
+              <RecentOrders orders={recentOrders} loading={loading} />
+            </div>
 
-        <div className="xl:col-span-1">
-          <InventoryStatus inventory={inventory} loading={loading} />
-        </div>
-      </div>
+            {isMobileView && (
+              <div className="xl:col-span-1">
+                <InventoryStatus inventory={inventory} loading={loading} />
+              </div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   )
 }

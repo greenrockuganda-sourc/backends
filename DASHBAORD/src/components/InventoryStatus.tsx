@@ -26,7 +26,7 @@ export default function InventoryStatus({ inventory, loading }: InventoryStatusP
     <div className="bg-white rounded-lg border border-gray-200 overflow-hidden">
       <div className="p-6 border-b border-gray-200">
         <div className="flex items-center gap-2">
-          <AlertCircle size={20} className="text-red-500" />
+          <AlertCircle size={20} className="text-blue-600" />
           <h3 className="text-lg font-bold text-gray-900">Low Stock Items</h3>
         </div>
       </div>
@@ -36,13 +36,13 @@ export default function InventoryStatus({ inventory, loading }: InventoryStatusP
           <p className="text-gray-500 text-sm text-center py-8">All items are well stocked</p>
         ) : (
           lowStockItems.map(item => (
-            <div key={item.id} className="flex flex-col gap-3 rounded-lg border border-red-200 bg-red-50 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div key={item.id} className="flex flex-col gap-3 rounded-lg border border-blue-200 bg-blue-50 p-4 sm:flex-row sm:items-center sm:justify-between">
               <div>
                 <p className="text-sm font-medium text-gray-900">{item.name}</p>
                 <p className="text-xs text-gray-500">{item.sku}</p>
               </div>
               <div className="text-left sm:text-right">
-                <p className="text-lg font-bold text-red-600">{item.stock}</p>
+                <p className="text-lg font-bold text-blue-600">{item.stock}</p>
                 <p className="text-xs text-gray-500">units</p>
               </div>
             </div>

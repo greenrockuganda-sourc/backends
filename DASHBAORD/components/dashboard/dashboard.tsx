@@ -84,7 +84,7 @@ export function Dashboard() {
         <div className="lg:col-span-2">
           <RecentOrders />
         </div>
-        <div>
+        <div className="lg:hidden">
           <InventoryStatus />
         </div>
       </div>

@@ -13,6 +13,7 @@ https://docs.djangoproject.com/en/6.0/ref/settings/
 import os
 from datetime import timedelta
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -33,6 +34,47 @@ def load_environment_file(env_path: Path) -> None:
         os.environ.setdefault(key, value)
 
 
+def get_bool_env(key: str, default: bool = False) -> bool:
+    value = os.getenv(key)
+    if value is None:
+        return default
+    return value.strip().lower() in {'1', 'true', 'yes', 'on'}
+
+
+def parse_database_url(database_url: str) -> dict:
+    parsed = urlparse(database_url)
+    scheme = parsed.scheme
+    engine_map = {
+        'postgres': 'django.db.backends.postgresql',
+        'postgresql': 'django.db.backends.postgresql',
+        'postgresql_psycopg2': 'django.db.backends.postgresql',
+        'sqlite': 'django.db.backends.sqlite3',
+        'mysql': 'django.db.backends.mysql',
+    }
+
+    if scheme == 'sqlite':
+        db_path = parsed.path.lstrip('/') or 'db.sqlite3'
+        return {
+            'ENGINE': engine_map['sqlite'],
+            'NAME': str(BASE_DIR / db_path),
+        }
+
+    db_config = {
+        'ENGINE': engine_map.get(scheme, 'django.db.backends.postgresql'),
+        'NAME': unquote(parsed.path.lstrip('/')),
+        'USER': unquote(parsed.username or ''),
+        'PASSWORD': unquote(parsed.password or ''),
+        'HOST': parsed.hostname or '',
+        'PORT': str(parsed.port or ''),
+    }
+
+    sslmode = os.getenv('DB_SSLMODE')
+    if sslmode:
+        db_config['OPTIONS'] = {'sslmode': sslmode}
+
+    return db_config
+
+
 load_environment_file(BASE_DIR / '.env')
 
 
@@ -40,12 +82,41 @@ load_environment_file(BASE_DIR / '.env')
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-dbnmi-wv$!jil%d!1gh$pqh+9tdlx)vuoy%x8_gdobz=tn30d#'
+SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-dbnmi-wv$!jil%d!1gh$pqh+9tdlx)vuoy%x8_gdobz=tn30d#')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = get_bool_env('DEBUG', False)
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1', '0.0.0.0', '10.0.2.2', '192.168.1.10', '::1']
+ALLOWED_HOSTS = [
+    host.strip()
+    for host in os.getenv(
+        'ALLOWED_HOSTS',
+        'localhost,127.0.0.1,0.0.0.0,10.0.2.2,192.168.1.10,::1',
+    ).split(',')
+    if host.strip()
+]
+
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',')
+    if origin.strip()
+]
+
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STATIC_URL = 'static/'
+STATICFILES_STORAGE = 'whitenoise.storage.CompressedManifestStaticFilesStorage'
+
+DATABASE_URL = os.getenv('DATABASE_URL')
+DATABASES = {
+    'default': parse_database_url(DATABASE_URL)
+    if DATABASE_URL
+    else {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
+    }
+}
 
 # Application definition
 
@@ -63,6 +134,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -94,17 +166,6 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 AUTH_USER_MODEL = 'store.User'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 AUTHENTICATION_BACKENDS = ['store.authentication.EmailOrPhoneBackend']
-
-
-# Database
-# https://docs.djangoproject.com/en/6.0/ref/settings/#databases
-
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
-}
 
 
 # Password validation
@@ -141,7 +202,6 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
 
-STATIC_URL = 'static/'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
