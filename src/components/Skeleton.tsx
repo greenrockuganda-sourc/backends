@@ -1,4 +1,4 @@
-darkrt React from 'react'
+import React from 'react'
 
 interface SkeletonProps {
   className?: string

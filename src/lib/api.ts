@@ -88,6 +88,13 @@ export async function login(identifier: string, password: string) {
   })
 }
 
+export async function register(userData: { first_name: string; last_name: string; email: string; phone_number: string; password: string; role?: string }) {
+  return request<any>('/api/auth/register/', {
+    method: 'POST',
+    body: JSON.stringify(userData),
+  })
+}
+
 export async function fetchProfile(token: string) {
   return request<any>('/api/user/profile/', {}, token)
 }
