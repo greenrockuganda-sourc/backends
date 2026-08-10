@@ -1,4 +1,9 @@
 {
   "version": 3,
-  "rootDirectory": "DASHBAORD"
+  "name": "backend",
+  "framework": "vite",
+  "rootDirectory": "DASHBAORD",
+  "installCommand": "corepack pnpm install",
+  "buildCommand": "corepack pnpm build",
+  "outputDirectory": "dist"
 }
