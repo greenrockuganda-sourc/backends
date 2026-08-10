@@ -5,12 +5,13 @@ WORKDIR /app
 # Install pnpm via Corepack
 RUN corepack enable
 
-COPY package.json pnpm-lock.yaml ./
+# Use the dashboard package manifest and lockfile from the subdirectory
+COPY DASHBAORD/package.json DASHBAORD/pnpm-lock.yaml ./
 
-# Install only the dashboard dependencies
+# Install dashboard dependencies
 RUN corepack pnpm install --no-frozen-lockfile
 
-COPY . ./
+COPY DASHBAORD ./
 
 RUN corepack pnpm build
 
@@ -18,7 +19,7 @@ FROM node:24-alpine AS runner
 WORKDIR /app
 
 COPY --from=builder /app/dist ./dist
-COPY server.js ./server.js
+COPY --from=builder /app/server.js ./server.js
 
 EXPOSE 8080
 
