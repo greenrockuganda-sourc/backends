@@ -8,7 +8,7 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml ./
 
 # Install only the dashboard dependencies
-RUN corepack pnpm install --frozen-lockfile
+RUN corepack pnpm install --no-frozen-lockfile
 
 COPY . ./
 
