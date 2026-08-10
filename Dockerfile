@@ -5,12 +5,12 @@ WORKDIR /app
 # Install pnpm via Corepack
 RUN corepack enable
 
-COPY package.json pnpm-lock.yaml .npmrc ./
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 
 # Allow required dependency build scripts in CI and install dependencies
-RUN corepack pnpm config set allowBuilds core-js,esbuild && \
-    corepack pnpm config set allowBuilds.core-js true && \
-    corepack pnpm config set allowBuilds.esbuild true && \
+RUN corepack pnpm config set --location project allowBuilds core-js,esbuild && \
+    corepack pnpm config set --location project allowBuilds.core-js true && \
+    corepack pnpm config set --location project allowBuilds.esbuild true && \
     corepack pnpm install --no-frozen-lockfile
 
 COPY . ./
