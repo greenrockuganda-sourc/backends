@@ -5,8 +5,8 @@ WORKDIR /app
 # Install pnpm via Corepack
 RUN corepack enable
 
-# Use the dashboard package manifest and lockfile from the subdirectory
-COPY DASHBAORD/package.json DASHBAORD/pnpm-lock.yaml ./
+# Use the dashboard package manifest, lockfile, and npmrc from the subdirectory
+COPY DASHBAORD/package.json DASHBAORD/pnpm-lock.yaml DASHBAORD/.npmrc ./
 
 # Install dashboard dependencies
 RUN corepack pnpm install --no-frozen-lockfile
