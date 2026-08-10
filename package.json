@@ -3,6 +3,6 @@
   "private": true,
   "packageManager": "pnpm@10.0.0",
   "scripts": {
-    "build": "pnpm --dir DASHBAORD install && pnpm --dir DASHBAORD build"
+    "build": "corepack pnpm --dir DASHBAORD install --no-frozen-lockfile && corepack pnpm --dir DASHBAORD build"
   }
 }
