@@ -26,8 +26,8 @@ export class CloudinaryService {
   private uploadPreset: string
 
   constructor() {
-    this.cloudName = process.env.NEXT_PUBLIC_CLOUDINARY_CLOUD_NAME || ''
-    this.uploadPreset = process.env.NEXT_PUBLIC_CLOUDINARY_UPLOAD_PRESET || ''
+    this.cloudName = import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || ''
+    this.uploadPreset = import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || ''
 
     if (!this.cloudName || !this.uploadPreset) {
       console.warn('[Cloudinary] Missing environment variables for Cloudinary upload')

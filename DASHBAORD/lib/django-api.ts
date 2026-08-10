@@ -6,7 +6,7 @@
 import { Order, OrderItem, Delivery } from './types'
 
 // Configuration for Django API endpoints
-const DJANGO_API_BASE = process.env.NEXT_PUBLIC_DJANGO_API_URL || 'http://localhost:8000/api'
+const DJANGO_API_BASE = `${(import.meta.env.VITE_API_BASE_URL ?? 'http://127.0.0.1:8000').replace(/\/+$/, '')}/api`
 const API_VERSION = 'v1'
 
 // API endpoints matching Django URL patterns
