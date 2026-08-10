@@ -1,6 +1,10 @@
 packages:
   - '.'
 
+allowBuilds:
+  - core-js
+  - esbuild
+
 onlyBuiltDependencies:
   - core-js
   - esbuild
