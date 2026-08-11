@@ -13,4 +13,4 @@ RUN chmod +x ./start.sh
 RUN python manage.py collectstatic --noinput
 
 EXPOSE 8000
-ENTRYPOINT ["/bin/bash", "-c", "exec /app/start.sh"]
+ENTRYPOINT ["/app/start.sh"]
