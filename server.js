@@ -38,6 +38,14 @@ const serveFile = async (filePath, res) => {
   }
 }
 
+async function readRequestBody(stream) {
+  const chunks = []
+  for await (const chunk of stream) {
+    chunks.push(chunk)
+  }
+  return Buffer.concat(chunks)
+}
+
 const backendBaseUrl = process.env.API_BASE_URL || process.env.VITE_API_BASE_URL || ''
 const shouldProxyApi = backendBaseUrl.trim() !== ''
 
@@ -58,7 +66,7 @@ createServer(async (req, res) => {
       }
       headers.delete('host')
 
-      const body = ['GET', 'HEAD'].includes(req.method || 'GET') ? undefined : await req.arrayBuffer()
+      const body = ['GET', 'HEAD'].includes(req.method || 'GET') ? undefined : await readRequestBody(req)
       const backendResponse = await fetch(proxyUrl, {
         method: req.method || 'GET',
         headers,
