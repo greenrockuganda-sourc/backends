@@ -47,7 +47,7 @@ createServer(async (req, res) => {
 
   if (shouldProxyApi && requestPath.startsWith('/api')) {
     try {
-      const proxyUrl = new URL(req.url, backendBaseUrl).toString()
+      const proxyUrl = new URL(req.url, backendBaseUrl.trim()).toString()
       const headers = new Headers()
 
       for (const [name, value] of Object.entries(req.headers)) {
