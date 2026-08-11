@@ -1,6 +1,7 @@
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1
+ENV PORT=8000
 WORKDIR /app
 
 COPY requirements.txt ./
@@ -12,4 +13,4 @@ RUN chmod +x ./start.sh
 RUN python manage.py collectstatic --noinput
 
 EXPOSE 8000
-CMD ["/bin/sh", "-c", "/app/start.sh"]
+ENTRYPOINT ["/bin/bash", "-c", "exec /app/start.sh"]
