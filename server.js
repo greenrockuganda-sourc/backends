@@ -38,8 +38,50 @@ const serveFile = async (filePath, res) => {
   }
 }
 
+const backendBaseUrl = process.env.API_BASE_URL || ''
+const shouldProxyApi = backendBaseUrl !== ''
+
 createServer(async (req, res) => {
-  const requestPath = new URL(req.url, `http://localhost:${port}`).pathname
+  const requestUrl = new URL(req.url, `http://localhost:${port}`)
+  const requestPath = requestUrl.pathname
+
+  if (shouldProxyApi && requestPath.startsWith('/api')) {
+    try {
+      const proxyUrl = new URL(req.url, backendBaseUrl).toString()
+      const headers = new Headers()
+
+      for (const [name, value] of Object.entries(req.headers)) {
+        if (value !== undefined) {
+          const headerValue = Array.isArray(value) ? value.join(', ') : String(value)
+          headers.set(name, headerValue)
+        }
+      }
+      headers.delete('host')
+
+      const body = ['GET', 'HEAD'].includes(req.method || 'GET') ? undefined : await req.arrayBuffer()
+      const backendResponse = await fetch(proxyUrl, {
+        method: req.method || 'GET',
+        headers,
+        body,
+        redirect: 'manual',
+      })
+
+      const responseHeaders = {}
+      backendResponse.headers.forEach((value, name) => {
+        responseHeaders[name] = value
+      })
+
+      res.writeHead(backendResponse.status, responseHeaders)
+      const responseBuffer = await backendResponse.arrayBuffer()
+      res.end(Buffer.from(responseBuffer))
+      return
+    } catch (error) {
+      res.writeHead(502, { 'Content-Type': 'text/plain' })
+      res.end('Bad gateway: unable to proxy request to backend.')
+      return
+    }
+  }
+
   let filePath = path.join(distDir, requestPath)
 
   if (requestPath === '/' || requestPath === '') {
@@ -57,5 +99,9 @@ createServer(async (req, res) => {
   }
 }).listen(port, () => {
   // eslint-disable-next-line no-console
-  console.log(`Server listening on port ${port}`)
+  if (shouldProxyApi) {
+    console.log(`Server listening on port ${port} and proxying /api to ${backendBaseUrl}`)
+  } else {
+    console.log(`Server listening on port ${port}`)
+  }
 })
