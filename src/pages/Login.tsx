@@ -23,6 +23,18 @@ export default function Login({ onLogin }: LoginProps) {
     setError(null)
     setSuccessMessage(null)
 
+    if (isRegistering) {
+      if (!firstName.trim() || !lastName.trim() || !identifier.trim() || !phoneNumber.trim() || !password) {
+        setError('Please fill in all signup fields.')
+        setLoading(false)
+        return
+      }
+    } else if (!identifier.trim() || !password) {
+      setError('Please enter your email or phone and password.')
+      setLoading(false)
+      return
+    }
+
     try {
       if (isRegistering) {
         await register({
@@ -31,16 +43,24 @@ export default function Login({ onLogin }: LoginProps) {
           email: identifier,
           phone_number: phoneNumber,
           password,
-          role: 'Customer',
+          role: 'Seller',
         })
         setSuccessMessage('Account created successfully. Please sign in.')
         setIsRegistering(false)
         setPassword('')
+        setPhoneNumber('')
         return
       }
 
       const data = await login(identifier, password)
-      onLogin(data.access, data.refresh, data.user || { email: identifier })
+      const user = data.user || { email: identifier }
+      if (!user.role || !['Seller', 'Admin'].includes(user.role)) {
+        setError('Access denied. Only authorized dashboard users can sign in.')
+        setLoading(false)
+        return
+      }
+
+      onLogin(data.access, data.refresh, user)
     } catch (err) {
       setError(err instanceof Error ? err.message : isRegistering ? 'Unable to create account' : 'Unable to sign in')
     } finally {
