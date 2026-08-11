@@ -517,6 +517,12 @@ class LoginAPIView(APIView):
         if not user:
             return Response({'detail': 'Invalid credentials.'}, status=status.HTTP_401_UNAUTHORIZED)
 
+        if user.role not in {'Seller', 'Admin'}:
+            return Response(
+                {'detail': 'Access denied. This account does not have dashboard access.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         refresh = RefreshToken.for_user(user)
         return Response(
             {
