@@ -73,9 +73,21 @@ export default function Dashboard({ token, user }: DashboardProps) {
         }
 
         const summary = dashboardData?.summary ?? {}
-        const productList = (productsData?.results ?? productsData ?? [])
-        const orderList = (ordersData?.results ?? ordersData ?? [])
-        const deliveryList = (deliveriesData?.results ?? deliveriesData ?? [])
+        const productList = Array.isArray(productsData?.results)
+          ? productsData.results
+          : Array.isArray(productsData)
+            ? productsData
+            : []
+        const orderList = Array.isArray(ordersData?.results)
+          ? ordersData.results
+          : Array.isArray(ordersData)
+            ? ordersData
+            : []
+        const deliveryList = Array.isArray(deliveriesData?.results)
+          ? deliveriesData.results
+          : Array.isArray(deliveriesData)
+            ? deliveriesData
+            : []
 
         const rangeStart = getRangeStartDate(range)
         const filteredOrdersForRange = orderList.filter((order: any) => {
@@ -119,7 +131,8 @@ export default function Dashboard({ token, user }: DashboardProps) {
           lowStock,
         })
 
-        const normalizedOrders = (dashboardData?.recent_activity?.recent_orders ?? []).map((order: any) => ({
+        const recentOrdersRaw = dashboardData?.recent_activity?.recent_orders
+        const normalizedOrders = (Array.isArray(recentOrdersRaw) ? recentOrdersRaw : []).map((order: any) => ({
           id: order.order_number ?? order.id ?? 'N/A',
           customer: order.customer ?? 'Guest',
           amount: Number(order.total_amount ?? order.amount ?? 0),

@@ -39,14 +39,20 @@ export default function Receipts({ token }: ReceiptsProps) {
         const data = await fetchReceipts(token)
         if (!active) return
 
-        const normalizedReceipts = (data?.results ?? data ?? []).map((receipt: any) => ({
+        const receiptsArray = Array.isArray(data?.results)
+          ? data.results
+          : Array.isArray(data)
+            ? data
+            : []
+
+        const normalizedReceipts = receiptsArray.map((receipt: any) => ({
           id: String(receipt.id ?? receipt.receipt_id ?? 'N/A'),
           receiptNumber: receipt.receipt_number ?? receipt.receiptNumber ?? `${receipt.id ?? 'N/A'}`,
           orderNumber: receipt.order_number ?? receipt.orderNumber ?? receipt.order_id ?? receipt.orderId ?? 'N/A',
           customer: receipt.customer ?? receipt.customer_name ?? 'Guest',
           amount: Number(receipt.amount ?? receipt.total_amount ?? 0),
           date: formatReceiptDate(receipt.date ?? receipt.receipt_date ?? receipt.created_at ?? ''),
-          items: (receipt.items ?? []).map((item: any) => ({
+          items: (Array.isArray(receipt.items) ? receipt.items : []).map((item: any) => ({
             product_name: item.product_name ?? item.name ?? 'Item',
             quantity: Number(item.quantity ?? 0),
             unit_price: Number(item.unit_price ?? item.price ?? 0),
@@ -155,28 +161,28 @@ export default function Receipts({ token }: ReceiptsProps) {
                     <td data-label="Customer" className="px-6 py-4 text-sm text-gray-900">{receipt.customer}</td>
                     <td data-label="Items" className="px-6 py-4 text-sm text-gray-900">
                       <div className="space-y-1">
-                        {(receipt.items ?? []).length > 0 ? receipt.items!.map((item, index) => (
+                        {Array.isArray(receipt.items) && receipt.items.length > 0 ? receipt.items.map((item, index) => (
                           <div key={`${receipt.id}-${index}`} className="font-medium">{item.product_name}</div>
                         )) : <span className="text-gray-400">No items</span>}
                       </div>
                     </td>
                     <td data-label="Qty" className="px-6 py-4 text-sm text-gray-900">
                       <div className="space-y-1">
-                        {(receipt.items ?? []).length > 0 ? receipt.items!.map((item, index) => (
+                        {Array.isArray(receipt.items) && receipt.items.length > 0 ? receipt.items.map((item, index) => (
                           <div key={`${receipt.id}-qty-${index}`}>{item.quantity}</div>
                         )) : <span className="text-gray-400">—</span>}
                       </div>
                     </td>
                     <td data-label="Cost Each" className="px-6 py-4 text-sm text-gray-900">
                       <div className="space-y-1">
-                        {(receipt.items ?? []).length > 0 ? receipt.items!.map((item, index) => (
+                        {Array.isArray(receipt.items) && receipt.items.length > 0 ? receipt.items.map((item, index) => (
                           <div key={`${receipt.id}-price-${index}`}>{formatCurrency(item.unit_price)}</div>
                         )) : <span className="text-gray-400">—</span>}
                       </div>
                     </td>
                     <td data-label="Total" className="px-6 py-4 text-sm font-medium text-gray-900">
                       <div className="space-y-1">
-                        {(receipt.items ?? []).length > 0 ? receipt.items!.map((item, index) => (
+                        {Array.isArray(receipt.items) && receipt.items.length > 0 ? receipt.items.map((item, index) => (
                           <div key={`${receipt.id}-sub-${index}`}>{formatCurrency(item.subtotal)}</div>
                         )) : <span className="text-gray-400">—</span>}
                       </div>
@@ -254,7 +260,7 @@ export default function Receipts({ token }: ReceiptsProps) {
                     </tr>
                   </thead>
                   <tbody>
-                    {(selectedReceipt.items ?? []).length > 0 ? selectedReceipt.items!.map((item, index) => (
+                    {Array.isArray(selectedReceipt.items) && selectedReceipt.items.length > 0 ? selectedReceipt.items.map((item, index) => (
                       <tr key={`${selectedReceipt.id}-${index}`} className="border-t border-gray-200">
                         <td className="px-3 py-2">{item.product_name}</td>
                         <td className="px-3 py-2">{item.quantity}</td>

@@ -62,10 +62,10 @@ export default function Reports({ token }: ReportsProps) {
           <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
             <p className="text-xs uppercase tracking-wide text-gray-500">Status breakdown</p>
             <div className="mt-3 space-y-2 text-sm text-gray-700">
-              {(report.orders_by_status ?? []).map((item: any, index: number) => {
+              {Array.isArray(report.orders_by_status) ? report.orders_by_status.map((item: any, index: number) => {
                 const status = Object.keys(item)[0]
                 return <div key={index}>{status}: {item[status]}</div>
-              })}
+              }) : null}
             </div>
           </div>
         </div>
@@ -85,7 +85,7 @@ export default function Reports({ token }: ReportsProps) {
                 </tr>
               </thead>
               <tbody>
-                {(report.orders ?? []).map((item: any) => (
+                {Array.isArray(report.orders) ? report.orders.map((item: any) => (
                   <tr key={item.id} className="border-b border-gray-100 hover:bg-gray-50">
                     <td className="px-4 py-3">{item.order_number || item.id}</td>
                     <td className="px-4 py-3">{item.status}</td>
@@ -112,7 +112,7 @@ export default function Reports({ token }: ReportsProps) {
                 </tr>
               </thead>
               <tbody>
-                {(report.products ?? []).map((item: any, index: number) => (
+                {Array.isArray(report.products) ? report.products.map((item: any, index: number) => (
                   <tr key={index} className="border-b border-gray-100 hover:bg-gray-50">
                     <td className="px-4 py-3">{item.product_name}</td>
                     <td className="px-4 py-3">{item.stock}</td>
@@ -139,7 +139,7 @@ export default function Reports({ token }: ReportsProps) {
                 </tr>
               </thead>
               <tbody>
-                {(report.customers ?? []).map((item: any, index: number) => (
+                {Array.isArray(report.customers) ? report.customers.map((item: any, index: number) => (
                   <tr key={index} className="border-b border-gray-100 hover:bg-gray-50">
                     <td className="px-4 py-3">{item.customer_name}</td>
                     <td className="px-4 py-3">{item.orders}</td>

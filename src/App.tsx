@@ -46,6 +46,16 @@ export default function App() {
     })
   }, [])
 
+  const clearAuthSession = () => {
+    localStorage.removeItem('access')
+    localStorage.removeItem('refresh')
+    localStorage.removeItem('user')
+    setAccessToken(null)
+    setUser(null)
+    setProfileError(null)
+    setShowMoreMenu(false)
+  }
+
   useEffect(() => {
     if (!accessToken) {
       return
@@ -57,14 +67,22 @@ export default function App() {
 
     fetchProfile(accessToken)
       .then((profile) => {
-        if (active) {
-          setUser(profile)
-          localStorage.setItem('user', JSON.stringify(profile))
+        if (!active) {
+          return
         }
+
+        if (!profile || !profile.role || !['Seller', 'Admin'].includes(profile.role)) {
+          clearAuthSession()
+          return
+        }
+
+        setUser(profile)
+        localStorage.setItem('user', JSON.stringify(profile))
       })
       .catch(() => {
         if (active) {
-          setProfileError('Unable to load your profile from the server.')
+          clearAuthSession()
+          setProfileError('Unable to load your profile from the server. Please sign in again.')
         }
       })
       .finally(() => {
@@ -92,13 +110,7 @@ export default function App() {
   }
 
   const handleLogout = () => {
-    localStorage.removeItem('access')
-    localStorage.removeItem('refresh')
-    localStorage.removeItem('user')
-    setAccessToken(null)
-    setUser(null)
-    setProfileError(null)
-    setShowMoreMenu(false)
+    clearAuthSession()
   }
 
   const handleNavigate = (page: Page) => {

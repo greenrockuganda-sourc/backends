@@ -27,7 +27,13 @@ export default function Deliveries({ token }: DeliveriesProps) {
           return
         }
 
-        const normalizedDeliveries = (data?.results ?? data ?? []).map((delivery: any) => ({
+        const deliveriesArray = Array.isArray(data?.results)
+          ? data.results
+          : Array.isArray(data)
+            ? data
+            : []
+
+        const normalizedDeliveries = deliveriesArray.map((delivery: any) => ({
           id: delivery.id ?? delivery.delivery_id ?? 'N/A',
           orderId: delivery.order_number ?? delivery.orderId ?? 'N/A',
           driver: delivery.delivery_person ?? delivery.driver_name ?? delivery.driver ?? 'Unassigned',

@@ -91,7 +91,13 @@ export default function Products({ token }: ProductsProps) {
           return
         }
 
-        const normalizedProducts = (data?.results ?? data ?? []).map((product: any) => {
+        const productsArray = Array.isArray(data?.results)
+          ? data.results
+          : Array.isArray(data)
+            ? data
+            : []
+
+        const normalizedProducts = productsArray.map((product: any) => {
           const costPrice = Number(product.cost_price ?? product.buying_price ?? product.costPrice ?? 0)
           const sellingPrice = Number(product.price ?? product.selling_price ?? product.sellingPrice ?? 0)
           // Normalize category to a string — API may return an object or a string
@@ -134,11 +140,11 @@ export default function Products({ token }: ProductsProps) {
         if (!active) {
           return
         }
-        setCategories((categoryData ?? []).map((category: any) => ({
+        setCategories((Array.isArray(categoryData) ? categoryData : []).map((category: any) => ({
           id: String(category.id),
           category_name: category.category_name || category.name || 'Unknown',
         })))
-        setBrands((brandData ?? []).map((brand: any) => ({
+        setBrands((Array.isArray(brandData) ? brandData : []).map((brand: any) => ({
           id: String(brand.id),
           brand_name: brand.brand_name || brand.name || 'Unknown',
         })))
