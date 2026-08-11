@@ -1,0 +1,13 @@
+.git
+.env
+.venv
+node_modules
+frontend-
+DASHBAORD
+mobile
+mobile.worktrees
+build_output.txt
+store_test_output.txt
+*.pyc
+__pycache__
+*.sqlite3
