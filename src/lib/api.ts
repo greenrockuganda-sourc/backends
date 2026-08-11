@@ -60,8 +60,8 @@ async function request<T>(path: string, options: RequestInit = {}, token?: strin
     headers,
   })
 
+  const contentType = response.headers.get('content-type') || ''
   if (response.ok) {
-    const contentType = response.headers.get('content-type') || ''
     if (contentType.includes('application/json')) {
       return response.json() as Promise<T>
     }
@@ -77,8 +77,28 @@ async function request<T>(path: string, options: RequestInit = {}, token?: strin
     }
   }
 
-  const errorText = await response.text()
-  throw new Error(errorText || 'Request failed')
+  let errorMessage = 'Request failed'
+  if (contentType.includes('application/json')) {
+    try {
+      const errorBody = await response.json()
+      if (typeof errorBody === 'string') {
+        errorMessage = errorBody
+      } else if (errorBody.detail) {
+        errorMessage = errorBody.detail
+      } else if (typeof errorBody === 'object' && errorBody !== null) {
+        errorMessage = Object.values(errorBody)
+          .flat()
+          .filter(Boolean)
+          .join(' ') || errorMessage
+      }
+    } catch {
+      errorMessage = await response.text()
+    }
+  } else {
+    errorMessage = await response.text()
+  }
+
+  throw new Error(errorMessage || 'Request failed')
 }
 
 export async function login(identifier: string, password: string) {

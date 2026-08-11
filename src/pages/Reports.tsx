@@ -89,9 +89,9 @@ export default function Reports({ token }: ReportsProps) {
                   <tr key={item.id} className="border-b border-gray-100 hover:bg-gray-50">
                     <td className="px-4 py-3">{item.order_number || item.id}</td>
                     <td className="px-4 py-3">{item.status}</td>
-                    <td className="px-4 py-3">UGX {item.amount?.toFixed(2) ?? '0.00'}</td>
+                    <td className="px-4 py-3">UGX {item.amount != null ? item.amount.toFixed(2) : '0.00'}</td>
                   </tr>
-                ))}
+                )) : null}
               </tbody>
             </table>
           </div>
@@ -118,7 +118,7 @@ export default function Reports({ token }: ReportsProps) {
                     <td className="px-4 py-3">{item.stock}</td>
                     <td className="px-4 py-3">{item.status}</td>
                   </tr>
-                ))}
+                )) : null}
               </tbody>
             </table>
           </div>
@@ -145,7 +145,7 @@ export default function Reports({ token }: ReportsProps) {
                     <td className="px-4 py-3">{item.orders}</td>
                     <td className="px-4 py-3">UGX {item.total_spend?.toFixed(2) ?? '0.00'}</td>
                   </tr>
-                ))}
+                )) : null}
               </tbody>
             </table>
           </div>
