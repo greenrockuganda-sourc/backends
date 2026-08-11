@@ -8,6 +8,8 @@ RUN python -m pip install --upgrade pip && python -m pip install -r requirements
 
 COPY . ./
 
+RUN chmod +x ./start.sh
 RUN python manage.py collectstatic --noinput
 
-CMD ["gunicorn", "backend.wsgi:application", "--bind", "0.0.0.0:$PORT", "--workers", "3"]
+EXPOSE 8000
+ENTRYPOINT ["./start.sh"]
