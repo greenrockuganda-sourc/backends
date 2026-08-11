@@ -47,7 +47,7 @@ createServer(async (req, res) => {
 
   if (shouldProxyApi && requestPath.startsWith('/api')) {
     try {
-      const proxyUrl = new URL(req.url, backendBaseUrl).toString()
+      const proxyUrl = new URL(requestUrl.pathname + requestUrl.search, backendBaseUrl.trim()).toString()
       const headers = new Headers()
 
       for (const [name, value] of Object.entries(req.headers)) {
@@ -76,8 +76,9 @@ createServer(async (req, res) => {
       res.end(Buffer.from(responseBuffer))
       return
     } catch (error) {
+      console.error('API proxy failed:', backendBaseUrl, req.url, error)
       res.writeHead(502, { 'Content-Type': 'text/plain' })
-      res.end('Bad gateway: unable to proxy request to backend.')
+      res.end(`Bad gateway: unable to proxy request to backend (${error instanceof Error ? error.message : String(error)})`)
       return
     }
   }
