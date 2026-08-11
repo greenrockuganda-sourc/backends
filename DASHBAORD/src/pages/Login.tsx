@@ -24,6 +24,21 @@ export default function Login({ onLogin }: LoginProps) {
     setSuccessMessage(null)
 
     try {
+      if (isRegistering) {
+        await register({
+          first_name: firstName,
+          last_name: lastName,
+          email: identifier,
+          phone_number: phoneNumber,
+          password,
+          role: 'Customer',
+        })
+        setSuccessMessage('Account created successfully. Please sign in.')
+        setIsRegistering(false)
+        setPassword('')
+        return
+      }
+
       const data = await login(identifier, password)
       onLogin(data.access, data.refresh, data.user || { email: identifier })
     } catch (err) {
