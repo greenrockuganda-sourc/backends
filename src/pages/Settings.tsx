@@ -26,6 +26,8 @@ export default function Settings({ user, token, onProfileSave }: SettingsProps) 
   const [uploadingImage, setUploadingImage] = useState(false)
   const [imageUploadProgress, setImageUploadProgress] = useState(0)
 
+  const DEFAULT_PROFILE_PLACEHOLDER = 'https://via.placeholder.com/400.png?text=side-view-mix-cookies-with-walnut-chocolate-chips-cottage-cheese-ff-pastry-vanilla-sugar-powder.jpg'
+
   useEffect(() => {
     if (!user) {
       return
@@ -80,7 +82,7 @@ export default function Settings({ user, token, onProfileSave }: SettingsProps) 
             setImageUploadProgress(pct)
             if (pct === 100) {
               clearInterval(id)
-              resolve(`https://via.placeholder.com/400.png?text=${encodeURIComponent(file.name)}`)
+              resolve(DEFAULT_PROFILE_PLACEHOLDER)
             }
           }, 200)
         })
@@ -216,7 +218,7 @@ export default function Settings({ user, token, onProfileSave }: SettingsProps) 
               <label className="block text-sm font-medium text-gray-700 mb-2">Profile Image</label>
               <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
                 <div>
-                  <img src={profileImagePreview || settings.profileImage || '/favicon.ico'} alt="avatar" className="w-20 h-20 rounded-full object-cover border" />
+                  <img src={profileImagePreview || settings.profileImage || DEFAULT_PROFILE_PLACEHOLDER} alt="avatar" className="w-20 h-20 rounded-full object-cover border" />
                 </div>
                 <div className="flex-1">
                   <input
