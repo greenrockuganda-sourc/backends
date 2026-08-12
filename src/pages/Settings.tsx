@@ -26,7 +26,7 @@ export default function Settings({ user, token, onProfileSave }: SettingsProps) 
   const [uploadingImage, setUploadingImage] = useState(false)
   const [imageUploadProgress, setImageUploadProgress] = useState(0)
 
-  const DEFAULT_PROFILE_PLACEHOLDER = 'https://via.placeholder.com/400.png?text=side-view-mix-cookies-with-walnut-chocolate-chips-cottage-cheese-ff-pastry-vanilla-sugar-powder.jpg'
+  const DEFAULT_PROFILE_PLACEHOLDER = 'data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400"><rect width="400" height="400" fill="%23EDF2F7"/><text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="Arial, Helvetica, sans-serif" font-size="40" fill="%236B7280">Profile</text></svg>'
 
   useEffect(() => {
     if (!user) {
@@ -218,7 +218,15 @@ export default function Settings({ user, token, onProfileSave }: SettingsProps) 
               <label className="block text-sm font-medium text-gray-700 mb-2">Profile Image</label>
               <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
                 <div>
-                  <img src={profileImagePreview || settings.profileImage || DEFAULT_PROFILE_PLACEHOLDER} alt="avatar" className="w-20 h-20 rounded-full object-cover border" />
+                  <img
+                    src={profileImagePreview || settings.profileImage || DEFAULT_PROFILE_PLACEHOLDER}
+                    alt="avatar"
+                    onError={(event) => {
+                      event.currentTarget.onerror = null
+                      event.currentTarget.src = DEFAULT_PROFILE_PLACEHOLDER
+                    }}
+                    className="w-20 h-20 rounded-full object-cover border"
+                  />
                 </div>
                 <div className="flex-1">
                   <input
