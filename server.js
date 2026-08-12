@@ -76,12 +76,15 @@ createServer(async (req, res) => {
 
       const responseHeaders = {}
       backendResponse.headers.forEach((value, name) => {
+        if (['content-encoding', 'content-length', 'transfer-encoding'].includes(name.toLowerCase())) {
+          return
+        }
         responseHeaders[name] = value
       })
 
+      const responseBuffer = Buffer.from(await backendResponse.arrayBuffer())
       res.writeHead(backendResponse.status, responseHeaders)
-      const responseBuffer = await backendResponse.arrayBuffer()
-      res.end(Buffer.from(responseBuffer))
+      res.end(responseBuffer)
       return
     } catch (error) {
       console.error('API proxy failed:', backendBaseUrl, req.url, error)
