@@ -1180,13 +1180,18 @@ class CategoryDetailAPIView(APIView):
 
 
 class BrandListCreateAPIView(APIView):
-    permission_classes = [IsAdminUser]
+    # Allow public GET for listing brands; POST requires admin privileges
+    permission_classes = [AllowAny]
 
     def get(self, request):
         brands = Brand.objects.all().order_by('brand_name')
         return Response(BrandSerializer(brands, many=True).data, status=status.HTTP_200_OK)
 
     def post(self, request):
+        # Enforce admin permission for create
+        if not IsAdminUser().has_permission(request, self):
+            return Response({'detail': 'Authentication credentials were not provided or insufficient.'}, status=status.HTTP_401_UNAUTHORIZED)
+
         serializer = BrandWriteSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

@@ -209,6 +209,7 @@ SIMPLE_JWT = {
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:3000',
     'https://frontend-production-ae5e.up.railway.app',
+    'https://backends-production-3d0b.up.railway.app',
 ]
 
 CORS_ALLOW_CREDENTIALS = True
@@ -229,6 +230,7 @@ CORS_ALLOW_HEADERS = [
 CSRF_TRUSTED_ORIGINS = [
     'http://localhost:3000',
     'https://frontend-production-ae5e.up.railway.app',
+    'https://backends-production-3d0b.up.railway.app',
 ]
 
 # Cookie settings when using cookies for auth
