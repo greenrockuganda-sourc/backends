@@ -1,0 +1,8 @@
+{
+  "name": "backend-monorepo",
+  "private": true,
+  "packageManager": "pnpm@10.0.0",
+  "scripts": {
+    "build": "corepack pnpm --dir DASHBAORD install --no-frozen-lockfile && corepack pnpm --dir DASHBAORD build"
+  }
+}

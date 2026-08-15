@@ -1,0 +1,70 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Brands</h2>
+<form id="brand-form">
+  <input name="brand_name" placeholder="Brand name" required>
+  <input name="description" placeholder="Description">
+  <input name="country" placeholder="Country">
+  <input name="logo" placeholder="Logo URL">
+  <button type="submit">Save brand</button>
+</form>
+<div id="message" class="message"></div>
+<table>
+  <thead><tr><th>Name</th><th>Country</th><th>Description</th><th>Actions</th></tr></thead>
+  <tbody id="brand-list"></tbody>
+</table>
+<script>
+  const token = localStorage.getItem('accessToken');
+  const form = document.getElementById('brand-form');
+  const list = document.getElementById('brand-list');
+  const message = document.getElementById('message');
+  let editingId = null;
+  function showMessage(text, type) { message.className = 'message ' + type; message.textContent = text; }
+  function resetForm() { form.reset(); editingId = null; form.querySelector('button').textContent = 'Save brand'; }
+  async function loadBrands() {
+    const response = await fetch('/api/brands/', { headers: { Authorization: 'Bearer ' + token } });
+    const data = await response.json();
+    if (!response.ok) return;
+    list.innerHTML = data.map(brand => `
+      <tr>
+        <td>${brand.brand_name}</td>
+        <td>${brand.country || ''}</td>
+        <td>${brand.description || ''}</td>
+        <td class="actions">
+          <button type="button" onclick="editBrand(${brand.id})">Edit</button>
+          <button type="button" onclick="deleteBrand(${brand.id})">Delete</button>
+        </td>
+      </tr>
+    `).join('');
+  }
+  window.editBrand = async function(id) {
+    const response = await fetch('/api/brands/' + id + '/', { headers: { Authorization: 'Bearer ' + token } });
+    const brand = await response.json();
+    editingId = id;
+    form.elements.brand_name.value = brand.brand_name || '';
+    form.elements.description.value = brand.description || '';
+    form.elements.country.value = brand.country || '';
+    form.elements.logo.value = brand.logo || '';
+    form.querySelector('button').textContent = 'Update brand';
+  };
+  window.deleteBrand = async function(id) {
+    const response = await fetch('/api/brands/' + id + '/', { method: 'DELETE', headers: { Authorization: 'Bearer ' + token } });
+    const result = await response.json();
+    showMessage(result.message || 'Deleted', response.ok ? 'success' : 'error');
+    loadBrands();
+  };
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const payload = Object.fromEntries(new FormData(form).entries());
+    const response = await fetch('/api/brands/' + (editingId || ''), {
+      method: editingId ? 'PUT' : 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify(payload)
+    });
+    const result = await response.json();
+    showMessage(editingId ? 'Brand updated' : 'Brand created', response.ok ? 'success' : 'error');
+    if (response.ok) { resetForm(); loadBrands(); }
+  });
+  loadBrands();
+</script>
+{% endblock %}

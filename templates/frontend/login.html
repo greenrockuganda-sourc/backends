@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Admin Login</h2>
+<p>Sign in with your admin credentials to manage products, customers, orders, and delivery operations.</p>
+<form id="login-form">
+  <input name="email_or_phone" placeholder="Email or phone number" required>
+  <input name="password" type="password" placeholder="Password" required>
+  <button type="submit">Login</button>
+</form>
+<div id="message"></div>
+<script>
+  const form = document.getElementById('login-form');
+  const message = document.getElementById('message');
+  const submitButton = form.querySelector('button');
+
+  function showMessage(text, type) {
+    message.className = 'message ' + type;
+    message.textContent = text;
+  }
+
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(form).entries());
+    const identifier = (data.email_or_phone || '').trim();
+    const password = (data.password || '').trim();
+
+    if (!identifier || password.length < 8) {
+      showMessage('Please enter a valid email or phone number and a password with at least 8 characters.', 'error');
+      return;
+    }
+
+    submitButton.disabled = true;
+    submitButton.textContent = 'Signing in...';
+
+    try {
+      const response = await fetch('/api/auth/login/', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ email_or_phone: identifier, password })
+      });
+      const result = await response.json();
+      if (response.ok) {
+        localStorage.setItem('accessToken', result.access);
+        localStorage.setItem('refreshToken', result.refresh);
+        showMessage('Login successful. Access granted.', 'success');
+      } else {
+        showMessage(result.detail || result.message || 'Login failed.', 'error');
+      }
+    } catch (error) {
+      showMessage('Unable to reach the server. Please try again.', 'error');
+    } finally {
+      submitButton.disabled = false;
+      submitButton.textContent = 'Login';
+    }
+  });
+</script>
+{% endblock %}

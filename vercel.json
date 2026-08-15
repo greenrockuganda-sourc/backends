@@ -1,0 +1,9 @@
+{
+  "version": 3,
+  "name": "backend",
+  "framework": "vite",
+  "rootDirectory": "DASHBAORD",
+  "installCommand": "corepack pnpm install --no-frozen-lockfile",
+  "buildCommand": "corepack pnpm build",
+  "outputDirectory": "dist"
+}

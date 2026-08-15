@@ -1,0 +1,71 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Receipt Management</h2>
+<p>Receipts are generated automatically for each order and can be sent to a Bluetooth receipt printer from this page.</p>
+<table>
+  <thead><tr><th>Receipt</th><th>Customer</th><th>Order</th><th>Amount</th><th>Date</th><th>Actions</th></tr></thead>
+  <tbody id="receipt-list"></tbody>
+</table>
+<script>
+  const token = localStorage.getItem('accessToken');
+  const list = document.getElementById('receipt-list');
+
+  async function printReceipt(receiptId) {
+    if (!navigator.bluetooth) {
+      alert('Web Bluetooth is not supported in this browser.');
+      return;
+    }
+
+    const response = await fetch(`/api/receipts/${receiptId}/print/`, { headers: { Authorization: 'Bearer ' + token } });
+    const payload = await response.json();
+    if (!response.ok) {
+      alert(payload.detail || 'Unable to prepare receipt for printing.');
+      return;
+    }
+
+    try {
+      const device = await navigator.bluetooth.requestDevice({
+        acceptAllDevices: true,
+        optionalServices: ['0000ff00-0000-0000-0000-000000000000', '0000ffe0-0000-1000-8000-00805f9b34fb', '6e400001-b5a3-f393-e0a9-e50e24dcca9e']
+      });
+      const server = await device.gatt.connect();
+      const services = await server.getPrimaryServices();
+      let characteristic = null;
+      for (const service of services) {
+        const candidates = await service.getCharacteristics();
+        characteristic = candidates.find(candidate => candidate.properties.writeWithoutResponse || candidate.properties.write);
+        if (characteristic) break;
+      }
+      if (!characteristic) {
+        throw new Error('No printable Bluetooth characteristic was found.');
+      }
+      const bytes = new TextEncoder().encode(`${payload.print_text}\n\n`);
+      await characteristic.writeValue(bytes);
+      await device.gatt.disconnect();
+      alert('Receipt sent to the Bluetooth printer.');
+    } catch (error) {
+      alert(error.message || 'Unable to connect to the Bluetooth printer.');
+    }
+  }
+
+  async function loadReceipts() {
+    const response = await fetch('/api/admin/receipts/', { headers: { Authorization: 'Bearer ' + token } });
+    const data = await response.json();
+    if (!response.ok) return;
+    list.innerHTML = data.map(receipt => `
+      <tr>
+        <td>${receipt.receipt_number}</td>
+        <td>${receipt.customer}</td>
+        <td>${receipt.order_number}</td>
+        <td>${receipt.amount}</td>
+        <td>${receipt.date}</td>
+        <td class="actions">
+          <a href="/api/receipts/${receipt.id}/download/" target="_blank">Download</a>
+          <button type="button" onclick="printReceipt(${receipt.id})">Print</button>
+        </td>
+      </tr>
+    `).join('');
+  }
+  loadReceipts();
+</script>
+{% endblock %}

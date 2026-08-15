@@ -1,0 +1,45 @@
+<html>
+  <body style="font-family: Arial, sans-serif; color: #1f2937;">
+    <p>Hi {{ customer.get_full_name|default:customer.email }},</p>
+    <p>Thank you for your order. Attached is receipt <strong>{{ receipt.receipt_number }}</strong> for order <strong>{{ order.order_number }}</strong>.</p>
+    <p>
+      Amount: <strong>{{ receipt.total_amount }}</strong><br />
+      Date: <strong>{{ receipt.receipt_date|date:"F j, Y" }}</strong>
+    </p>
+    <h4>Items</h4>
+    <table style="width:100%; border-collapse: collapse; margin-top:8px;">
+      <thead>
+        <tr>
+          <th style="text-align:left; padding:6px; border-bottom:1px solid #e5e7eb;">Item</th>
+          <th style="text-align:left; padding:6px; border-bottom:1px solid #e5e7eb;">Qty</th>
+          <th style="text-align:left; padding:6px; border-bottom:1px solid #e5e7eb;">Price</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for item in items %}
+          <tr>
+            <td style="padding:6px; border-bottom:1px solid #f3f4f6;">
+              {% if item.image_cid %}
+                <img src="cid:{{ item.image_cid }}" alt="{{ item.name }}" style="width:64px; height:64px; object-fit:cover; vertical-align:middle; margin-right:8px; border-radius:6px;" />
+              {% elif item.image_url %}
+                <img src="{{ item.image_url }}" alt="{{ item.name }}" style="width:64px; height:64px; object-fit:cover; vertical-align:middle; margin-right:8px; border-radius:6px;" />
+              {% endif %}
+              <span style="vertical-align:middle;">{{ item.name }}</span>
+            </td>
+            <td style="padding:6px; border-bottom:1px solid #f3f4f6;">{{ item.quantity }}</td>
+            <td style="padding:6px; border-bottom:1px solid #f3f4f6;">{{ item.unit_price }}</td>
+          </tr>
+        {% empty %}
+          <tr><td colspan="3" style="padding:6px;">No items</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+    {% if receipt.pdf_url %}
+    <p>
+      Download a copy anytime: <a href="{{ receipt.pdf_url }}">View PDF receipt</a>
+    </p>
+    {% endif %}
+    <p>We appreciate your business with {{ company_name }}.</p>
+    <p>Regards,<br />{{ company_name }} Support</p>
+  </body>
+</html>
