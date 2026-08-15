@@ -546,9 +546,9 @@ class LoginAPIView(APIView):
         response = Response({'user': UserSerializer(user).data}, status=status.HTTP_200_OK)
 
         cookie_kwargs = {
-            'httponly': True,
-            'secure': not settings.DEBUG,
-            'samesite': 'Strict',
+            'httponly': getattr(settings, 'SESSION_COOKIE_HTTPONLY', True),
+            'secure': getattr(settings, 'SESSION_COOKIE_SECURE', not settings.DEBUG),
+            'samesite': getattr(settings, 'SESSION_COOKIE_SAMESITE', 'Strict'),
             'path': '/',
         }
 
@@ -605,9 +605,9 @@ class RefreshAPIView(TokenRefreshView):
 
         response = Response({'detail': 'Token refreshed.'}, status=status.HTTP_200_OK)
         cookie_kwargs = {
-            'httponly': True,
-            'secure': not settings.DEBUG,
-            'samesite': 'Strict',
+            'httponly': getattr(settings, 'SESSION_COOKIE_HTTPONLY', True),
+            'secure': getattr(settings, 'SESSION_COOKIE_SECURE', not settings.DEBUG),
+            'samesite': getattr(settings, 'SESSION_COOKIE_SAMESITE', 'Strict'),
             'path': '/',
         }
         response.set_cookie('access', access, max_age=int(settings.SIMPLE_JWT['ACCESS_TOKEN_LIFETIME'].total_seconds()), **cookie_kwargs)
