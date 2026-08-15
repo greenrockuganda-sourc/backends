@@ -104,13 +104,29 @@ export class CloudinaryService {
     height?: number,
     quality: string = 'auto'
   ): string {
-    let url = `https://res.cloudinary.com/${this.cloudName}/image/upload/`
-
-    if (width || height) {
-      url += `c_fill,w_${width || 'auto'},h_${height || 'auto'},`
+    // If caller passed a full URL, return it unchanged
+    if (!publicId) return ''
+    if (publicId.startsWith('http://') || publicId.startsWith('https://')) {
+      return publicId
     }
 
-    url += `q_${quality}/${publicId}`
+    // Ensure publicId is safe for path usage
+    const encodedId = encodeURIComponent(publicId)
+    let url = `https://res.cloudinary.com/${this.cloudName}/image/upload/`
+
+    const transforms: string[] = []
+    if (width || height) {
+      transforms.push(`c_fill,w_${width || 'auto'},h_${height || 'auto'}`)
+    }
+    if (quality) {
+      transforms.push(`q_${quality}`)
+    }
+
+    if (transforms.length) {
+      url += `${transforms.join(',')}/`
+    }
+
+    url += encodedId
     return url
   }
 
