@@ -15,7 +15,7 @@ from django.contrib.auth.tokens import default_token_generator
 from django.core.cache import cache
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import F, Q, Sum
 from django.http import FileResponse, HttpResponse
 from django.template.loader import render_to_string
@@ -904,25 +904,35 @@ class ProductListCreateAPIView(APIView):
             image_url, image_url_2, image_url_3, image_url_4 = (uploaded_urls + ['', '', '', ''])[:4]
 
         product_name = validated.get('product_name') or 'New Product'
-        product = Product.objects.create(
-            category=category,
-            brand=brand,
-            product_name=product_name,
-            description=validated.get('description') or '',
-            barcode=validated.get('barcode') or '',
-            sku=validated.get('sku') or generate_product_sku(product_name),
-            buying_price=validated.get('buying_price') or Decimal('0.00'),
-            selling_price=validated.get('selling_price') or Decimal('0.00'),
-            quantity_in_stock=validated.get('quantity_in_stock') or 0,
-            reorder_level=validated.get('reorder_level') or 0,
-            image_url=image_url,
-            image_url_2=image_url_2,
-            image_url_3=image_url_3,
-            image_url_4=image_url_4,
-            weight=validated.get('weight'),
-            unit=validated.get('unit') or '',
-            status=validated.get('status') or ('Out of Stock' if (validated.get('quantity_in_stock') or 0) <= 0 else 'Available'),
-        )
+        requested_sku = (validated.get('sku') or '').strip()
+        if requested_sku and Product.objects.filter(sku=requested_sku).exists():
+            return Response({'sku': ['A product with this SKU already exists.']}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            product = Product.objects.create(
+                category=category,
+                brand=brand,
+                product_name=product_name,
+                description=validated.get('description') or '',
+                barcode=validated.get('barcode') or '',
+                sku=requested_sku or generate_product_sku(product_name),
+                buying_price=validated.get('buying_price') or Decimal('0.00'),
+                selling_price=validated.get('selling_price') or Decimal('0.00'),
+                quantity_in_stock=validated.get('quantity_in_stock') or 0,
+                reorder_level=validated.get('reorder_level') or 0,
+                image_url=image_url,
+                image_url_2=image_url_2,
+                image_url_3=image_url_3,
+                image_url_4=image_url_4,
+                weight=validated.get('weight'),
+                unit=validated.get('unit') or '',
+                status=validated.get('status') or ('Out of Stock' if (validated.get('quantity_in_stock') or 0) <= 0 else 'Available'),
+            )
+        except IntegrityError:
+            return Response(
+                {'detail': 'A product with the same SKU or barcode already exists.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         return Response(ProductSerializer(product).data, status=status.HTTP_201_CREATED)
 
 
@@ -998,6 +1008,9 @@ class ProductDetailAPIView(APIView):
         if validated.get('barcode') is not None:
             product.barcode = validated['barcode']
         if validated.get('sku') is not None:
+            duplicate_sku = Product.objects.filter(sku=validated['sku']).exclude(pk=product.pk).exists()
+            if duplicate_sku:
+                return Response({'sku': ['A product with this SKU already exists.']}, status=status.HTTP_400_BAD_REQUEST)
             product.sku = validated['sku']
         elif product_name is not None:
             product.sku = generate_product_sku(product_name, exclude_product_id=product.id)
@@ -1044,7 +1057,13 @@ class ProductDetailAPIView(APIView):
             product.status = 'Out of Stock'
         elif product.status == 'Out of Stock':
             product.status = 'Available'
-        product.save()
+        try:
+            product.save()
+        except IntegrityError:
+            return Response(
+                {'detail': 'A product with the same SKU or barcode already exists.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         return Response(ProductSerializer(product).data, status=status.HTTP_200_OK)
 
     def patch(self, request, product_id):
