@@ -92,6 +92,8 @@ class AuthAndProfileAPITests(TestCase):
         }, format='json')
 
         self.assertEqual(login_response.status_code, 200)
+        self.assertIn('access', login_response.data)
+        self.assertIn('refresh', login_response.data)
         # tokens should be set in HttpOnly cookies
         self.assertIn('access', self.client.cookies)
         self.assertIn('refresh', self.client.cookies)

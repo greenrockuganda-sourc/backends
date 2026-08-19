@@ -537,13 +537,24 @@ class LoginAPIView(APIView):
         if not user:
             return Response({'detail': 'Invalid credentials.'}, status=status.HTTP_401_UNAUTHORIZED)
 
-        # Allow all active users to login; endpoint is used for both frontend and dashboard.
-
+        # Customer accounts also use the mobile API, so issue JWTs for every
+        # active, authenticated user. Admin-only permissions stay enforced on
+        # the management endpoints themselves.
         refresh = RefreshToken.for_user(user)
         access_token = str(refresh.access_token)
         refresh_token = str(refresh)
 
-        response = Response({'user': UserSerializer(user).data}, status=status.HTTP_200_OK)
+        # Cookies support browser clients, while returning the tokens keeps the
+        # dashboard and mobile clients (which use Authorization headers) able
+        # to authenticate subsequent API requests.
+        response = Response(
+            {
+                'access': access_token,
+                'refresh': refresh_token,
+                'user': UserSerializer(user).data,
+            },
+            status=status.HTTP_200_OK,
+        )
 
         cookie_kwargs = {
             'httponly': getattr(settings, 'SESSION_COOKIE_HTTPONLY', True),
