@@ -704,7 +704,17 @@ class BestSellerProductAPIView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
-        queryset = Product.objects.select_related('category', 'brand').order_by('-selling_price')[:8]
+        moving_order_statuses = ['Confirmed', 'Processing', 'Packed', 'Out for Delivery', 'Delivered']
+        queryset = (
+            Product.objects
+            .select_related('category', 'brand')
+            .filter(status='Available')
+            .annotate(sales_count=Sum(
+                'order_items__quantity',
+                filter=Q(order_items__order__order_status__in=moving_order_statuses),
+            ))
+            .order_by('-sales_count', '-updated_at')[:60]
+        )
         if queryset.exists():
             payload = ProductSerializer(queryset, many=True).data
         else:
