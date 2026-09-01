@@ -95,17 +95,21 @@ class ProductSerializer(serializers.ModelSerializer):
     category_id = serializers.PrimaryKeyRelatedField(source='category', queryset=Category.objects.all(), write_only=True, required=False)
     brand_id = serializers.PrimaryKeyRelatedField(source='brand', queryset=Brand.objects.all(), write_only=True, required=False)
     image_urls = serializers.SerializerMethodField()
+    sales_count = serializers.SerializerMethodField()
 
     class Meta:
         model = Product
         fields = [
             'id', 'category', 'brand', 'category_id', 'brand_id', 'product_name', 'description', 'barcode', 'sku',
-            'buying_price', 'selling_price', 'quantity_in_stock', 'reorder_level', 'image_url', 'image_url_2', 'image_url_3', 'image_url_4', 'image_urls', 'weight', 'unit', 'status',
+            'buying_price', 'selling_price', 'quantity_in_stock', 'reorder_level', 'sales_count', 'image_url', 'image_url_2', 'image_url_3', 'image_url_4', 'image_urls', 'weight', 'unit', 'status',
             'created_at', 'updated_at',
         ]
 
     def get_image_urls(self, obj):
         return [url for url in [obj.image_url, obj.image_url_2, obj.image_url_3, obj.image_url_4] if url]
+
+    def get_sales_count(self, obj):
+        return int(getattr(obj, 'sales_count', 0) or 0)
 
 
 class ProductWriteSerializer(serializers.Serializer):
