@@ -1,0 +1,7 @@
+0000000000000000000000000000000000000000 07ee8098a540e2ee453436acd50356c4d3af2e23 joshua <joshuajessey3@gmail.com> 1784368650 +0300	commit (initial): Initial commit
+07ee8098a540e2ee453436acd50356c4d3af2e23 07ee8098a540e2ee453436acd50356c4d3af2e23 joshua <joshuajessey3@gmail.com> 1785514174 +0300	reset: moving to HEAD
+07ee8098a540e2ee453436acd50356c4d3af2e23 07ee8098a540e2ee453436acd50356c4d3af2e23 joshua <joshuajessey3@gmail.com> 1785514182 +0300	reset: moving to HEAD
+07ee8098a540e2ee453436acd50356c4d3af2e23 4826a75206f7748f8369f9d6fad96b0d1203ee78 joshua <joshuajessey3@gmail.com> 1785514231 +0300	commit: jj
+4826a75206f7748f8369f9d6fad96b0d1203ee78 50e4e94c1f3ef16b7be27143d729057317eb47a2 joshua <joshuajessey3@gmail.com> 1785514428 +0300	commit: feat: add utility functions for currency formatting and order image URL extraction
+50e4e94c1f3ef16b7be27143d729057317eb47a2 29215ff0f1e9d025c5c583db8ad2bb0eb21b8c7d joshua <joshuajessey3@gmail.com> 1785620114 +0300	commit: Refactor code structure for improved readability and maintainability
+29215ff0f1e9d025c5c583db8ad2bb0eb21b8c7d 10a6fc4aee0803d6573b42b316c4275850bc186b joshua <joshuajessey3@gmail.com> 1786314181 +0300	commit: Update app.json for Android adaptive icons and add mobile versioning file
