@@ -2331,10 +2331,17 @@ def frontend_home(request):
 
 
 def download_android_app(request):
-    """Send visitors to the current signed Android installer."""
-    return redirect(
-        'https://expo.dev/artifacts/eas/Xhwp6f3IrjVi9j4YznXuEe70K23VqHfyNR4tQplwuxE.apk'
+    """Send visitors to the current signed Android installer.
+
+    Set ANDROID_APP_DOWNLOAD_URL on Railway after each successful EAS APK
+    build. Keeping the URL in deployment settings lets the public homepage
+    always send users to the latest release without another code change.
+    """
+    download_url = os.getenv(
+        'ANDROID_APP_DOWNLOAD_URL',
+        'https://expo.dev/artifacts/eas/Xhwp6f3IrjVi9j4YznXuEe70K23VqHfyNR4tQplwuxE.apk',
     )
+    return redirect(download_url)
 
 
 def dashboard_screen(request):
