@@ -511,8 +511,14 @@ class RegisterAPIView(APIView):
         serializer = RegisterSerializer(data=request.data)
         if serializer.is_valid():
             user = serializer.save()
+            refresh = RefreshToken.for_user(user)
             return Response(
-                {'message': 'Account created successfully.', 'user': UserSerializer(user).data},
+                {
+                    'message': 'Account created successfully.',
+                    'access': str(refresh.access_token),
+                    'refresh': str(refresh),
+                    'user': UserSerializer(user).data,
+                },
                 status=status.HTTP_201_CREATED,
             )
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
@@ -772,7 +778,6 @@ class PublicProductCatalogAPIView(APIView):
         queryset = (
             Product.objects
             .select_related('category', 'brand')
-            .filter(status='Available')
             .annotate(sales_count=Sum(
                 'order_items__quantity',
                 filter=Q(order_items__order__order_status__in=[

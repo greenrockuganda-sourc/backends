@@ -85,6 +85,7 @@ class AuthAndProfileAPITests(TestCase):
 
         self.assertEqual(register_response.status_code, 201)
         self.assertIn('user', register_response.data)
+        self.assertIn('access', register_response.data)
 
         login_response = self.client.post(login_url, {
             'email': 'jane@example.com',
@@ -391,6 +392,28 @@ class AuthAndProfileAPITests(TestCase):
         self.assertEqual(list_response.status_code, 200)
         self.assertTrue(list_response.data[0]['image_urls'])
         self.assertEqual(list_response.data[0]['items'][0]['image_url'], product.image_url)
+
+
+class PublicCatalogAPITests(TestCase):
+    def test_catalog_includes_out_of_stock_products(self):
+        category = Category.objects.create(category_name='Hair Care')
+        brand = Brand.objects.create(brand_name='Glow')
+        available = Product.objects.create(
+            category=category, brand=brand, product_name='Available Shampoo',
+            buying_price='5000', selling_price='9000', quantity_in_stock=4,
+            sku='AVAILABLE-SHAMPOO', status='Available',
+        )
+        unavailable = Product.objects.create(
+            category=category, brand=brand, product_name='Unavailable Conditioner',
+            buying_price='5000', selling_price='9000', quantity_in_stock=0,
+            sku='UNAVAILABLE-CONDITIONER', status='Out of Stock',
+        )
+
+        response = APIClient().get(reverse('public_product_catalog'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['count'], 2)
+        self.assertEqual({item['id'] for item in response.data['results']}, {available.id, unavailable.id})
 
 
 class AdminDashboardAndProductAPITests(TestCase):
