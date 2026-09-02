@@ -25,7 +25,7 @@ from email.mime.image import MIMEImage
 import tempfile
 from reportlab.pdfgen import canvas
 from io import BytesIO
-from django.shortcuts import render
+from django.shortcuts import redirect, render
 from django.utils import timezone
 
 try:
@@ -2276,6 +2276,13 @@ class AdminReceiptPDFAPIView(APIView):
 
 def frontend_home(request):
     return render(request, 'frontend/home.html')
+
+
+def download_android_app(request):
+    """Send visitors to the current signed Android installer."""
+    return redirect(
+        'https://expo.dev/artifacts/eas/Xhwp6f3IrjVi9j4YznXuEe70K23VqHfyNR4tQplwuxE.apk'
+    )
 
 
 def dashboard_screen(request):

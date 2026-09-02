@@ -1,37 +1,84 @@
-{% extends 'base.html' %}
-{% block content %}
-<h2>Salon Products Admin Console</h2>
-<p>Manage your catalog, inventory, customers, orders, payments, deliveries, receipts, and reports from one place.</p>
-<div id="summary" class="grid"></div>
-<div class="grid" style="margin-top: 1rem;">
-  <div class="card"><h3>Operations</h3><p><a href="/dashboard/">View dashboard</a></p><p><a href="/products/">Manage products</a></p><p><a href="/inventory/">Update stock</a></p></div>
-  <div class="card"><h3>Catalog</h3><p><a href="/categories/">Manage categories</a></p><p><a href="/brands/">Manage brands</a></p></div>
-  <div class="card"><h3>Customers & Orders</h3><p><a href="/customers/">Manage customers</a></p><p><a href="/orders/">Review orders</a></p><p><a href="/payments/">Track payments</a></p></div>
-  <div class="card"><h3>Delivery & Reports</h3><p><a href="/deliveries/">Manage deliveries</a></p><p><a href="/receipts/">Receipt center</a></p><p><a href="/reports/">Reports & analytics</a></p></div>
-</div>
-<script>
-  const token = localStorage.getItem('accessToken');
-  const box = document.getElementById('summary');
-  async function loadSummary() {
-    if (!token) {
-      box.innerHTML = '<div class="card"><h3>Admin access</h3><p>Please log in with an admin account to view the dashboard.</p></div>';
-      return;
-    }
-    try {
-      const response = await fetch('/api/admin/dashboard/', { headers: { Authorization: 'Bearer ' + token } });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.detail || 'Unable to fetch dashboard');
-      const summary = result.summary || {};
-      box.innerHTML = [
-        ['Products', summary.total_products],
-        ['Customers', summary.total_customers],
-        ['Orders', summary.total_orders],
-        ['Revenue', '$' + Number(summary.revenue_this_month || 0).toLocaleString()]
-      ].map(([label, value]) => `<div class="card"><h3>${label}</h3><p style="font-size: 1.3rem; font-weight: bold;">${value}</p></div>`).join('');
-    } catch (error) {
-      box.innerHTML = `<div class="card"><h3>Unavailable</h3><p>${error.message}</p></div>`;
-    }
-  }
-  loadSummary();
-</script>
-{% endblock %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Glow delivers professional salon supplies straight to your door in Uganda.">
+  <title>Glow — Salon supplies, delivered</title>
+  <style>
+    :root { --navy: #01143f; --blue: #2563eb; --orange: #f5821f; --ink: #10213f; --muted: #64748b; --paper: #f8fafc; }
+    * { box-sizing: border-box; }
+    body { margin: 0; color: var(--ink); background: var(--paper); font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    a { color: inherit; text-decoration: none; }
+    .hero { overflow: hidden; color: white; background: radial-gradient(circle at 82% 20%, #1e4f9e 0, transparent 31rem), linear-gradient(135deg, #01143f 5%, #082764 100%); }
+    .nav, .hero-content, .section, .download-panel, .footer-inner { width: min(1120px, calc(100% - 40px)); margin: 0 auto; }
+    .nav { min-height: 76px; display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+    .brand { display: flex; align-items: center; gap: 10px; font-weight: 900; font-size: 24px; letter-spacing: .08em; }
+    .brand-mark { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; color: var(--navy); background: var(--orange); font-size: 17px; }
+    .nav-links { display: flex; align-items: center; gap: 24px; color: #dce7ff; font-weight: 650; font-size: 14px; }
+    .nav-download { padding: 11px 16px; border-radius: 999px; color: #fff; background: var(--orange); }
+    .hero-content { display: grid; grid-template-columns: 1.1fr .9fr; align-items: center; gap: 56px; padding: 72px 0 84px; }
+    .eyebrow { display: inline-flex; padding: 7px 11px; margin-bottom: 18px; border: 1px solid rgba(255,255,255,.22); border-radius: 999px; background: rgba(255,255,255,.09); color: #c8daff; font-weight: 750; font-size: 13px; }
+    h1 { max-width: 630px; margin: 0; font-size: clamp(40px, 6vw, 70px); line-height: .98; letter-spacing: -.055em; }
+    .hero p { max-width: 550px; margin: 24px 0 30px; color: #d7e4fc; font-size: clamp(17px, 2vw, 20px); line-height: 1.6; }
+    .download-button { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 54px; padding: 15px 22px; border-radius: 13px; background: var(--orange); color: white; box-shadow: 0 12px 30px rgba(245,130,31,.32); font-weight: 850; font-size: 16px; transition: transform .2s ease, background .2s ease; }
+    .download-button:hover { background: #e9700c; transform: translateY(-2px); }
+    .download-note { display: block; margin-top: 13px; color: #aec4ed; font-size: 13px; }
+    .phone { position: relative; justify-self: center; width: min(310px, 78vw); padding: 13px; border: 8px solid #0a1221; border-radius: 39px; background: #f8fafc; box-shadow: 0 35px 55px rgba(0,0,0,.35); transform: rotate(5deg); }
+    .phone:before { content: ""; position: absolute; z-index: 2; top: 8px; left: 50%; width: 100px; height: 21px; border-radius: 999px; background: #0a1221; transform: translateX(-50%); }
+    .phone-screen { min-height: 465px; overflow: hidden; border-radius: 24px; background: linear-gradient(180deg, #01143f 0 27%, #f8fafc 27%); }
+    .phone-top { padding: 56px 21px 29px; color: white; font-weight: 850; font-size: 19px; }
+    .phone-top small { display: block; margin-top: 8px; color: #b7cbf2; font-size: 12px; font-weight: 600; }
+    .phone-products { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; padding: 16px; }
+    .phone-product { min-height: 156px; padding: 9px; border-radius: 12px; background: #fff; box-shadow: 0 4px 16px rgba(15,23,42,.08); }
+    .product-image { height: 85px; border-radius: 8px; background: linear-gradient(135deg, #f5d9c2, #fff4e8); }
+    .product-image.blue { background: linear-gradient(135deg, #cce1ff, #f3f8ff); }
+    .phone-product b { display: block; margin-top: 8px; font-size: 10px; }
+    .phone-product span { display: block; margin-top: 5px; color: var(--orange); font-size: 10px; font-weight: 850; }
+    .section { padding: 82px 0; }
+    .section-heading { max-width: 650px; margin: 0 auto 34px; text-align: center; }
+    h2 { margin: 0; font-size: clamp(28px, 4vw, 43px); letter-spacing: -.04em; }
+    .section-heading p { color: var(--muted); font-size: 17px; line-height: 1.6; }
+    .features { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+    .feature { min-height: 205px; padding: 25px; border: 1px solid #e3eaf4; border-radius: 18px; background: white; }
+    .feature-icon { display: grid; place-items: center; width: 45px; height: 45px; margin-bottom: 18px; border-radius: 13px; background: #edf4ff; font-size: 21px; }
+    .feature h3 { margin: 0 0 8px; font-size: 18px; }
+    .feature p { margin: 0; color: var(--muted); line-height: 1.55; }
+    .download-panel { display: flex; align-items: center; justify-content: space-between; gap: 28px; margin-bottom: 82px; padding: 38px; border-radius: 24px; color: #fff; background: linear-gradient(135deg, #f5821f, #df6410); box-shadow: 0 20px 35px rgba(245,130,31,.2); }
+    .download-panel h2 { max-width: 580px; }
+    .download-panel p { margin: 10px 0 0; color: #fff5ec; line-height: 1.5; }
+    .download-panel .download-button { flex: 0 0 auto; color: var(--navy); background: #fff; box-shadow: none; white-space: nowrap; }
+    footer { padding: 26px 0; color: #afc2e6; background: var(--navy); }
+    .footer-inner { display: flex; justify-content: space-between; gap: 15px; font-size: 14px; }
+    @media (max-width: 760px) { .nav { min-height: 65px; } .nav-links > a:not(.nav-download) { display: none; } .hero-content { grid-template-columns: 1fr; padding: 54px 0 60px; gap: 45px; } .phone { transform: none; } .features { grid-template-columns: 1fr; } .download-panel { align-items: flex-start; flex-direction: column; padding: 28px; } .footer-inner { flex-direction: column; } }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <nav class="nav" aria-label="Main navigation">
+      <a class="brand" href="/" aria-label="Glow home"><span class="brand-mark">✦</span>GLOW</a>
+      <div class="nav-links"><a href="#how-it-works">How it works</a><a href="#download">Get the app</a><a class="nav-download" href="{% url 'download_android_app' %}">Download Android</a></div>
+    </nav>
+    <div class="hero-content">
+      <div>
+        <span class="eyebrow">SALON SUPPLIES, DELIVERED</span>
+        <h1>Everything your salon needs, in one app.</h1>
+        <p>Shop trusted salon essentials, manage your orders, and get your supplies delivered straight to your door.</p>
+        <a class="download-button" href="{% url 'download_android_app' %}"><span aria-hidden="true">↓</span> Download for Android</a>
+        <span class="download-note">Free APK download · Android phones</span>
+      </div>
+      <div class="phone" aria-label="Glow app preview">
+        <div class="phone-screen"><div class="phone-top">Good morning ✦<small>Everything your salon needs.</small></div><div class="phone-products"><div class="phone-product"><div class="product-image"></div><b>Hair essentials</b><span>Shop now</span></div><div class="phone-product"><div class="product-image blue"></div><b>Salon tools</b><span>Shop now</span></div><div class="phone-product"><div class="product-image blue"></div><b>Beauty care</b><span>Shop now</span></div><div class="phone-product"><div class="product-image"></div><b>Fresh picks</b><span>Shop now</span></div></div></div>
+      </div>
+    </div>
+  </header>
+  <main>
+    <section class="section" id="how-it-works">
+      <div class="section-heading"><h2>Shop salon supplies without the stress.</h2><p>Glow makes it simple to find the products you need and keep your salon stocked.</p></div>
+      <div class="features"><article class="feature"><div class="feature-icon">⌕</div><h3>Discover more</h3><p>Browse a growing catalog of professional hair, beauty, and salon essentials.</p></article><article class="feature"><div class="feature-icon">▣</div><h3>Order in minutes</h3><p>Add products to your cart, choose your delivery address, and place your order securely.</p></article><article class="feature"><div class="feature-icon">⌁</div><h3>Delivered to you</h3><p>Track every order and receive supplies where your business needs them.</p></article></div>
+    </section>
+    <section class="download-panel" id="download"><div><h2>Ready to stock your salon smarter?</h2><p>Download Glow on your Android phone and start shopping today.</p></div><a class="download-button" href="{% url 'download_android_app' %}">Download Android APK</a></section>
+  </main>
+  <footer><div class="footer-inner"><strong>GLOW</strong><span>Salon supplies, delivered.</span></div></footer>
+</body>
+</html>
