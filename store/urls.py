@@ -4,6 +4,7 @@ from . import views
 
 urlpatterns = [
     path('', views.frontend_home, name='frontend_home'),
+    path('download/android/', views.download_android_app, name='download_android_app'),
     path('dashboard/', views.dashboard_screen, name='dashboard_screen'),
     path('products/', views.products_screen, name='products_screen'),
     path('categories/', views.categories_screen, name='categories_screen'),
