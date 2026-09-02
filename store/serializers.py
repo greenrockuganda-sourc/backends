@@ -14,14 +14,42 @@ class UserSerializer(serializers.ModelSerializer):
 
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=8)
+    email = serializers.EmailField(required=False, allow_blank=True, allow_null=True)
+    phone_number = serializers.CharField(required=False, allow_blank=True, allow_null=True)
+    salon_name = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    location = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    role = serializers.ChoiceField(choices=['Customer', 'Seller'], required=False, default='Customer')
 
     class Meta:
         model = User
-        fields = ['first_name', 'last_name', 'email', 'phone_number', 'password', 'role']
+        fields = ['first_name', 'last_name', 'email', 'phone_number', 'password', 'salon_name', 'location', 'role']
+
+    def validate(self, attrs):
+        email = str(attrs.get('email') or '').strip().lower()
+        phone_number = str(attrs.get('phone_number') or '').strip()
+        role = attrs.get('role', 'Customer')
+
+        if not email and not phone_number:
+            raise serializers.ValidationError('Enter an email address, a phone number, or both.')
+        if email and User.objects.filter(email__iexact=email).exists():
+            raise serializers.ValidationError({'email': 'An account with this email address already exists.'})
+        if phone_number and User.objects.filter(phone_number=phone_number).exists():
+            raise serializers.ValidationError({'phone_number': 'An account with this phone number already exists.'})
+        if role == 'Customer':
+            if not str(attrs.get('salon_name') or '').strip():
+                raise serializers.ValidationError({'salon_name': 'Salon name is required.'})
+            if not str(attrs.get('location') or '').strip():
+                raise serializers.ValidationError({'location': 'Salon location is required.'})
+
+        attrs['email'] = email or None
+        attrs['phone_number'] = phone_number or None
+        return attrs
 
     def create(self, validated_data):
         role = validated_data.pop('role', 'Customer')
         password = validated_data.pop('password')
+        salon_name = validated_data.pop('salon_name', '')
+        location = validated_data.pop('location', '')
         user = User.objects.create_user(
             email=validated_data['email'],
             password=password,
@@ -31,7 +59,13 @@ class RegisterSerializer(serializers.ModelSerializer):
             role=role,
             is_active=True,
         )
-        Customer.objects.get_or_create(user=user)
+        if role == 'Customer':
+            Customer.objects.create(
+                user=user,
+                salon_name=salon_name,
+                owner_name=user.get_full_name(),
+                address=location,
+            )
         return user
 
 

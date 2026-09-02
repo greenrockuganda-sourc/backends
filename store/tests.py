@@ -81,6 +81,8 @@ class AuthAndProfileAPITests(TestCase):
             'email': 'jane@example.com',
             'password': 'StrongPass123!',
             'phone_number': '1234567890',
+            'salon_name': 'Jane Salon',
+            'location': 'Kampala',
         }, format='json')
 
         self.assertEqual(register_response.status_code, 201)
@@ -112,6 +114,8 @@ class AuthAndProfileAPITests(TestCase):
             'email': 'john@example.com',
             'password': 'StrongPass123!',
             'phone_number': '9876543210',
+            'salon_name': 'John Salon',
+            'location': 'Kampala',
         }, format='json')
 
         login_response = self.client.post(reverse('login'), {
@@ -122,6 +126,23 @@ class AuthAndProfileAPITests(TestCase):
         self.assertEqual(login_response.status_code, 200)
         self.assertIn('access', self.client.cookies)
         access = self.client.cookies['access'].value
+
+    def test_customer_can_register_with_phone_only_and_salon_details(self):
+        response = self.client.post(reverse('register'), {
+            'first_name': 'Phone',
+            'last_name': 'Only',
+            'phone_number': '0700999000',
+            'password': 'StrongPass123!',
+            'salon_name': 'Glow Phone Salon',
+            'location': 'Ntinda, Kampala',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 201)
+        self.assertIn('access', response.data)
+        user = User.objects.get(phone_number='0700999000')
+        self.assertIsNone(user.email)
+        self.assertEqual(user.customer.salon_name, 'Glow Phone Salon')
+        self.assertEqual(user.customer.address, 'Ntinda, Kampala')
 
     def test_inactive_user_cannot_access_profile(self):
         user = User.objects.create_user(
@@ -146,6 +167,8 @@ class AuthAndProfileAPITests(TestCase):
             'email': 'cook@example.com',
             'password': 'StrongPass123!',
             'phone_number': '0700111223',
+            'salon_name': 'Cook Salon',
+            'location': 'Kampala',
         }, format='json')
         self.assertEqual(register_response.status_code, 201)
 
@@ -183,6 +206,8 @@ class AuthAndProfileAPITests(TestCase):
             'email': 'edit@example.com',
             'password': 'StrongPass123!',
             'phone_number': '0700111224',
+            'salon_name': 'Editor Salon',
+            'location': 'Kampala',
         }, format='json')
         self.assertEqual(register_response.status_code, 201)
 
@@ -224,6 +249,8 @@ class AuthAndProfileAPITests(TestCase):
             'email': 'delete@example.com',
             'password': 'StrongPass123!',
             'phone_number': '0700111225',
+            'salon_name': 'Remover Salon',
+            'location': 'Kampala',
         }, format='json')
         self.assertEqual(register_response.status_code, 201)
 
@@ -280,6 +307,8 @@ class AuthAndProfileAPITests(TestCase):
             'email': 'alice@example.com',
             'password': 'StrongPass123!',
             'phone_number': '0700000001',
+            'salon_name': 'Alice Salon',
+            'location': 'Kampala',
         }, format='json')
         self.assertEqual(register_response.status_code, 201)
 

@@ -7,9 +7,10 @@ class UserManager(BaseUserManager):
     use_in_migrations = True
 
     def _create_user(self, email, password, **extra_fields):
-        if not email:
-            raise ValueError('The Email field must be set')
-        email = self.normalize_email(email)
+        phone_number = str(extra_fields.get('phone_number') or '').strip()
+        if not email and not phone_number:
+            raise ValueError('An email address or phone number must be set')
+        email = self.normalize_email(email) if email else None
         user = self.model(email=email, **extra_fields)
         user.set_password(password)
         user.save(using=self._db)
@@ -32,7 +33,7 @@ class UserManager(BaseUserManager):
 
 class User(AbstractUser):
     username = None
-    email = models.EmailField(unique=True)
+    email = models.EmailField(unique=True, blank=True, null=True)
     phone_number = models.CharField(max_length=20, blank=True, null=True)
     role = models.CharField(
         max_length=20,
