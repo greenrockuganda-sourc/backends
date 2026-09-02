@@ -747,6 +747,53 @@ class BestSellerProductAPIView(APIView):
         return Response({'results': payload}, status=status.HTTP_200_OK)
 
 
+class PublicProductCatalogAPIView(APIView):
+    """Read-only, shopper-safe product catalog with pagination.
+
+    The administrative products endpoint is intentionally protected.  Mobile
+    shoppers use this endpoint instead so their catalog is not limited to the
+    small best-seller rail on the home screen.
+    """
+
+    permission_classes = [AllowAny]
+
+    def get(self, request):
+        try:
+            page = max(1, int(request.query_params.get('page', 1) or 1))
+        except (TypeError, ValueError):
+            page = 1
+
+        try:
+            page_size = int(request.query_params.get('page_size', 100) or 100)
+        except (TypeError, ValueError):
+            page_size = 100
+        page_size = max(1, min(page_size, 100))
+
+        queryset = (
+            Product.objects
+            .select_related('category', 'brand')
+            .filter(status='Available')
+            .annotate(sales_count=Sum(
+                'order_items__quantity',
+                filter=Q(order_items__order__order_status__in=[
+                    'Confirmed', 'Processing', 'Packed', 'Out for Delivery', 'Delivered',
+                ]),
+            ))
+            .order_by('-updated_at', '-id')
+        )
+        count = queryset.count()
+        start = (page - 1) * page_size
+        results = ProductSerializer(queryset[start:start + page_size], many=True).data
+
+        return Response({
+            'count': count,
+            'page': page,
+            'page_size': page_size,
+            'next': page < ((count + page_size - 1) // page_size),
+            'results': results,
+        }, status=status.HTTP_200_OK)
+
+
 class HomeProfileAPIView(APIView):
     permission_classes = [AllowAny]
 
@@ -1220,18 +1267,18 @@ class CategoryDetailAPIView(APIView):
 
 
 class BrandListCreateAPIView(APIView):
-    # Allow public GET for listing brands; POST requires admin privileges
-    permission_classes = [AllowAny]
+    def get_permissions(self):
+        # Brand names and logos are needed to browse the public mobile catalog;
+        # create operations remain restricted to administrators.
+        if self.request.method == 'GET':
+            return [AllowAny()]
+        return [IsAdminUser()]
 
     def get(self, request):
         brands = Brand.objects.all().order_by('brand_name')
         return Response(BrandSerializer(brands, many=True).data, status=status.HTTP_200_OK)
 
     def post(self, request):
-        # Enforce admin permission for create
-        if not IsAdminUser().has_permission(request, self):
-            return Response({'detail': 'Authentication credentials were not provided or insufficient.'}, status=status.HTTP_401_UNAUTHORIZED)
-
         serializer = BrandWriteSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
