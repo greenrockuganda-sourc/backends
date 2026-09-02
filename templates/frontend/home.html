@@ -44,13 +44,20 @@
     .feature-icon { display: grid; place-items: center; width: 45px; height: 45px; margin-bottom: 18px; border-radius: 13px; background: #edf4ff; font-size: 21px; }
     .feature h3 { margin: 0 0 8px; font-size: 18px; }
     .feature p { margin: 0; color: var(--muted); line-height: 1.55; }
+    .install-guide { padding-top: 0; }
+    .install-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+    .install-step { position: relative; min-height: 170px; padding: 24px; border: 1px solid #dce7f7; border-radius: 18px; background: #fff; }
+    .install-number { display: grid; place-items: center; width: 32px; height: 32px; margin-bottom: 16px; border-radius: 50%; background: var(--navy); color: #fff; font-size: 14px; font-weight: 850; }
+    .install-step h3 { margin: 0 0 8px; font-size: 17px; }
+    .install-step p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.55; }
+    .compatibility-note { margin: 25px auto 0; max-width: 760px; padding: 14px 18px; border-radius: 12px; color: #344565; background: #edf4ff; font-size: 14px; line-height: 1.55; text-align: center; }
     .download-panel { display: flex; align-items: center; justify-content: space-between; gap: 28px; margin-bottom: 82px; padding: 38px; border-radius: 24px; color: #fff; background: linear-gradient(135deg, #f5821f, #df6410); box-shadow: 0 20px 35px rgba(245,130,31,.2); }
     .download-panel h2 { max-width: 580px; }
     .download-panel p { margin: 10px 0 0; color: #fff5ec; line-height: 1.5; }
     .download-panel .download-button { flex: 0 0 auto; color: var(--navy); background: #fff; box-shadow: none; white-space: nowrap; }
     footer { padding: 26px 0; color: #afc2e6; background: var(--navy); }
     .footer-inner { display: flex; justify-content: space-between; gap: 15px; font-size: 14px; }
-    @media (max-width: 760px) { .nav { min-height: 65px; } .nav-links > a:not(.nav-download) { display: none; } .hero-content { grid-template-columns: 1fr; padding: 54px 0 60px; gap: 45px; } .phone { transform: none; } .features { grid-template-columns: 1fr; } .download-panel { align-items: flex-start; flex-direction: column; padding: 28px; } .footer-inner { flex-direction: column; } }
+    @media (max-width: 760px) { .nav { min-height: 65px; } .nav-links > a:not(.nav-download) { display: none; } .hero-content { grid-template-columns: 1fr; padding: 54px 0 60px; gap: 45px; } .phone { transform: none; } .features, .install-grid { grid-template-columns: 1fr; } .download-panel { align-items: flex-start; flex-direction: column; padding: 28px; } .footer-inner { flex-direction: column; } }
   </style>
 </head>
 <body>
@@ -65,7 +72,7 @@
         <h1>Everything your salon needs, in one app.</h1>
         <p>Shop trusted salon essentials, manage your orders, and get your supplies delivered straight to your door.</p>
         <a class="download-button" href="{% url 'download_android_app' %}"><span aria-hidden="true">↓</span> Download for Android</a>
-        <span class="download-note">Free APK download · Android phones</span>
+        <span class="download-note">Free APK download · Works on Android 7.0 and newer</span>
       </div>
       <div class="phone" aria-label="Glow app preview">
         <div class="phone-screen"><div class="phone-top">Good morning ✦<small>Everything your salon needs.</small></div><div class="phone-products"><div class="phone-product"><div class="product-image"></div><b>Hair essentials</b><span>Shop now</span></div><div class="phone-product"><div class="product-image blue"></div><b>Salon tools</b><span>Shop now</span></div><div class="phone-product"><div class="product-image blue"></div><b>Beauty care</b><span>Shop now</span></div><div class="phone-product"><div class="product-image"></div><b>Fresh picks</b><span>Shop now</span></div></div></div>
@@ -76,6 +83,11 @@
     <section class="section" id="how-it-works">
       <div class="section-heading"><h2>Shop salon supplies without the stress.</h2><p>Glow makes it simple to find the products you need and keep your salon stocked.</p></div>
       <div class="features"><article class="feature"><div class="feature-icon">⌕</div><h3>Discover more</h3><p>Browse a growing catalog of professional hair, beauty, and salon essentials.</p></article><article class="feature"><div class="feature-icon">▣</div><h3>Order in minutes</h3><p>Add products to your cart, choose your delivery address, and place your order securely.</p></article><article class="feature"><div class="feature-icon">⌁</div><h3>Delivered to you</h3><p>Track every order and receive supplies where your business needs them.</p></article></div>
+    </section>
+    <section class="section install-guide" aria-labelledby="install-title">
+      <div class="section-heading"><h2 id="install-title">Install Glow on your Android phone.</h2><p>Download the signed APK directly from Glow, then follow these quick steps.</p></div>
+      <div class="install-grid"><article class="install-step"><div class="install-number">1</div><h3>Download the APK</h3><p>Tap the Download Android button and wait for the file to finish downloading.</p></article><article class="install-step"><div class="install-number">2</div><h3>Allow the install</h3><p>If Android asks, allow your browser or Files app to install apps from this source.</p></article><article class="install-step"><div class="install-number">3</div><h3>Open Glow</h3><p>Tap Install, then Open. Sign in and start ordering supplies for your salon.</p></article></div>
+      <p class="compatibility-note"><strong>Compatibility:</strong> Glow currently supports Android 7.0 or newer and needs an internet connection. iPhone downloads will be available through Apple TestFlight after the iOS build is completed.</p>
     </section>
     <section class="download-panel" id="download"><div><h2>Ready to stock your salon smarter?</h2><p>Download Glow on your Android phone and start shopping today.</p></div><a class="download-button" href="{% url 'download_android_app' %}">Download Android APK</a></section>
   </main>
