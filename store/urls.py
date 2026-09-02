@@ -25,6 +25,7 @@ urlpatterns = [
     path('api/banners/', views.BannerListAPIView.as_view(), name='banners'),
     path('api/categories/', views.CategoryListCreateAPIView.as_view(), name='categories'),
     path('api/products/best-sellers/', views.BestSellerProductAPIView.as_view(), name='best_sellers'),
+    path('api/catalog/products/', views.PublicProductCatalogAPIView.as_view(), name='public_product_catalog'),
     path('api/cart/', views.CartAPIView.as_view(), name='cart'),
     path('api/profile/', views.HomeProfileAPIView.as_view(), name='home_profile'),
     path('api/auth/register/', views.RegisterAPIView.as_view(), name='register'),
