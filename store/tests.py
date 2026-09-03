@@ -144,6 +144,33 @@ class AuthAndProfileAPITests(TestCase):
         self.assertEqual(user.customer.salon_name, 'Glow Phone Salon')
         self.assertEqual(user.customer.address, 'Ntinda, Kampala')
 
+    def test_password_reset_can_start_with_a_phone_number(self):
+        user = User.objects.create_user(
+            email='recovery@example.com',
+            password='OldPass123!',
+            first_name='Recovery',
+            last_name='User',
+            phone_number='0700888000',
+            is_active=True,
+        )
+
+        forgot_response = self.client.post(reverse('forgot_password'), {'identifier': user.phone_number}, format='json')
+
+        self.assertEqual(forgot_response.status_code, 200)
+        self.assertIn('uid', forgot_response.data)
+        self.assertIn('token', forgot_response.data)
+
+        reset_response = self.client.post(reverse('reset_password'), {
+            'uid': forgot_response.data['uid'],
+            'token': forgot_response.data['token'],
+            'new_password': 'NewPass123!',
+            'confirm_password': 'NewPass123!',
+        }, format='json')
+
+        self.assertEqual(reset_response.status_code, 200)
+        user.refresh_from_db()
+        self.assertTrue(user.check_password('NewPass123!'))
+
     def test_inactive_user_cannot_access_profile(self):
         user = User.objects.create_user(
             email='inactive@example.com',

@@ -642,8 +642,8 @@ class ForgotPasswordAPIView(APIView):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        email = serializer.validated_data['email']
-        user = User.objects.filter(email=email).first()
+        identifier = serializer.validated_data['identifier']
+        user = User.objects.filter(Q(email__iexact=identifier) | Q(phone_number=identifier)).first()
         if not user:
             return Response({'message': 'If that email exists, a reset link has been prepared.'}, status=status.HTTP_200_OK)
 

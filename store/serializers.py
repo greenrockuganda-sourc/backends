@@ -77,7 +77,15 @@ class ProfileSerializer(serializers.ModelSerializer):
 
 
 class ForgotPasswordSerializer(serializers.Serializer):
-    email = serializers.EmailField()
+    identifier = serializers.CharField(required=False, allow_blank=True)
+    email = serializers.EmailField(required=False, allow_blank=True)
+
+    def validate(self, attrs):
+        identifier = str(attrs.get('identifier') or attrs.get('email') or '').strip()
+        if not identifier:
+            raise serializers.ValidationError('Enter the email address or phone number on your account.')
+        attrs['identifier'] = identifier
+        return attrs
 
 
 class ResetPasswordSerializer(serializers.Serializer):
