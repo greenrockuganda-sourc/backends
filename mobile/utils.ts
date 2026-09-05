@@ -1,4 +1,6 @@
-export const DEFAULT_PRODUCT_IMAGE = 'https://images.unsplash.com/photo-1524504388940-b1c1722653e1?auto=format&fit=crop&w=800&q=80';
+// Used only when a product has no uploaded image. This is a product image—not
+// the Glow logo—so empty catalog records still look like products.
+export const DEFAULT_PRODUCT_IMAGE = 'https://images.unsplash.com/photo-1522337360788-8b13dee7a37e?auto=format&fit=crop&w=600&q=75';
 
 export const formatCurrency = (amount: number | string | null | undefined, locale = 'en-US', currency = 'UGX') => {
   const num = Number(amount || 0);

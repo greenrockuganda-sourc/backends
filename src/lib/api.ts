@@ -230,3 +230,21 @@ export async function updateDelivery(token: string, deliveryId: string, delivery
     body: JSON.stringify({ delivery_status: deliveryStatus }),
   }, token)
 }
+
+export async function fetchNotifications(token: string) {
+  return request<any[]>('/api/admin/notifications/', {}, token)
+}
+
+export async function markNotificationRead(token: string, notificationId: number) {
+  return request<any>(`/api/admin/notifications/${notificationId}/read/`, {
+    method: 'PATCH',
+    body: JSON.stringify({ is_read: true }),
+  }, token)
+}
+
+export async function sendNewArrivalNotification(token: string, title: string, message: string) {
+  return request<{ message: string; recipient_count: number }>('/api/admin/notifications/broadcast-new-arrival/', {
+    method: 'POST',
+    body: JSON.stringify({ title, message }),
+  }, token)
+}

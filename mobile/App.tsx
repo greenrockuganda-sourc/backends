@@ -7,6 +7,7 @@ import {
   FlatList,
   Image,
   ImageBackground,
+  Modal,
   NativeModules,
   Platform,
   RefreshControl,
@@ -71,9 +72,79 @@ const API_BASE_URLS = [
 const buildUrl = (path: string, baseUrl?: string) => `${baseUrl || API_BASE_URLS[0] || 'http://127.0.0.1:8000'}${path}`;
 const CART_STORAGE_KEY = '@glow-cart-v1';
 const AUTH_TOKEN_STORAGE_KEY = '@glow-auth-token-v1';
-const CATALOG_IMAGE_FALLBACK = require('./assets/glow-logo-navy-bg.jpg');
+const NOTIFICATION_PREFERENCE_STORAGE_KEY = '@glow-notification-preference-v1';
+const DISCOVER_MORE_PRODUCT_LIMIT = 60;
+const CATALOG_IMAGE_FALLBACK = { uri: DEFAULT_PRODUCT_IMAGE };
 const SPLASH_LOGO_URL = 'https://res.cloudinary.com/h78tlu47/image/upload/v1784708343/icon_sotujz.jpg';
 const SPLASH_DELIVERY_IMAGE_URL = 'https://res.cloudinary.com/h78tlu47/image/upload/v1784708354/glow-logo-navy-bg_tzzdwd.jpg';
+
+const DELIVERY_LOCATIONS: Record<string, string[]> = {
+  Kampala: ['Bugolobi', 'Bukoto', 'Bunga', 'Kawempe', 'Kibuli', 'Kisementi', 'Kololo', 'Makindye', 'Makerere', 'Ntinda', 'Rubaga', 'Muyenga'],
+  Wakiso: ['Entebbe', 'Kira', 'Kisasi', 'Kyanja', 'Najjanankumbi', 'Nansana', 'Namugongo', 'Ssonde'],
+  Mukono: ['Mukono Central', 'Nakifuma', 'Seeta'],
+  Jinja: ['Bugembe', 'Jinja Central', 'Mpumudde', 'Walukuba'],
+  Mbarara: ['Biharwe', 'Kakoba', 'Mbarara City', 'Nyamitanga'],
+  Gulu: ['Awach', 'Gulu City', 'Layibi', 'Pece'],
+  Mbale: ['Industrial Division', 'Mbale City', 'Nakhaloke', 'Northern Division'],
+  Masaka: ['Bukakata', 'Kimaanya', 'Masaka City', 'Nyendo'],
+  Arua: ['Arua City', 'Mvara', 'Oli', 'River Oli'],
+  Lira: ['Adyel', 'Lira City', 'Ojwina', 'Railway Division'],
+};
+
+const formatDeliveryLocation = (district: string, village: string) => district && village ? `${village}, ${district}` : '';
+
+const DeliveryLocationSelector = ({
+  district,
+  village,
+  onDistrictChange,
+  onVillageChange,
+}: {
+  district: string;
+  village: string;
+  onDistrictChange: (value: string) => void;
+  onVillageChange: (value: string) => void;
+}) => {
+  const [menu, setMenu] = useState<'district' | 'village' | null>(null);
+  const choices = menu === 'district' ? Object.keys(DELIVERY_LOCATIONS) : (DELIVERY_LOCATIONS[district] || []);
+
+  return (
+    <View>
+      <Text style={styles.locationLabel}>District</Text>
+      <TouchableOpacity style={styles.locationSelect} onPress={() => setMenu('district')} accessibilityRole="button">
+        <Text style={district ? styles.locationSelectValue : styles.locationSelectPlaceholder}>{district || 'Select district'}</Text>
+        <Text style={styles.locationSelectArrow}>⌄</Text>
+      </TouchableOpacity>
+      <Text style={styles.locationLabel}>Village / area</Text>
+      <TouchableOpacity style={[styles.locationSelect, !district && styles.locationSelectDisabled]} onPress={() => district && setMenu('village')} disabled={!district} accessibilityRole="button">
+        <Text style={village ? styles.locationSelectValue : styles.locationSelectPlaceholder}>{village || 'Select village or area'}</Text>
+        <Text style={styles.locationSelectArrow}>⌄</Text>
+      </TouchableOpacity>
+      <Modal visible={menu !== null} transparent animationType="fade" onRequestClose={() => setMenu(null)}>
+        <View style={styles.locationModalOverlay}>
+          <View style={styles.locationModalCard}>
+            <Text style={styles.locationModalTitle}>Select {menu === 'district' ? 'district' : 'village or area'}</Text>
+            <ScrollView style={styles.locationOptions}>
+              {choices.map((choice) => (
+                <TouchableOpacity key={choice} style={styles.locationOption} onPress={() => {
+                  if (menu === 'district') {
+                    onDistrictChange(choice);
+                    onVillageChange('');
+                  } else {
+                    onVillageChange(choice);
+                  }
+                  setMenu(null);
+                }}>
+                  <Text style={styles.locationOptionText}>{choice}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity style={styles.secondaryButton} onPress={() => setMenu(null)}><Text style={styles.secondaryButtonText}>Cancel</Text></TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+};
 
 const CatalogImage = ({ uri, style }: { uri: string; style: any }) => {
   const [failedToLoad, setFailedToLoad] = useState(false);
@@ -86,7 +157,7 @@ const CatalogImage = ({ uri, style }: { uri: string; style: any }) => {
     <Image
       source={failedToLoad ? CATALOG_IMAGE_FALLBACK : { uri }}
       style={style}
-      resizeMode="contain"
+      resizeMode="cover"
       onError={() => setFailedToLoad(true)}
     />
   );
@@ -277,6 +348,44 @@ const getProductRelationIds = (product: any, relation: 'category' | 'brand') => 
     .map(String);
 };
 
+const isProductOutOfStock = (product: any) => {
+  const status = String(product?.status || '').trim().toLowerCase();
+  const quantity = Number(product?.quantity_in_stock);
+  return status === 'out of stock' || (Number.isFinite(quantity) && quantity <= 0);
+};
+
+const getApiErrorMessage = (data: any, fallback: string) => {
+  if (!data || typeof data !== 'object') return fallback;
+  if (typeof data.detail === 'string') return data.detail;
+  if (typeof data.error === 'string') return data.error;
+
+  for (const value of Object.values(data)) {
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value) && typeof value[0] === 'string') return value[0];
+  }
+  return fallback;
+};
+
+const productMatchesCatalogItem = (product: any, item: any, relation: 'category' | 'brand') => {
+  const itemId = item?.id ?? item?.[`${relation}_id`] ?? item?.[`${relation}Id`];
+  const itemName = (item?.category_name || item?.brand_name || getCategoryTextValue(item)).trim().toLowerCase();
+  const productRelationIds = getProductRelationIds(product, relation);
+
+  if (itemId !== undefined && itemId !== null && itemId !== '' && productRelationIds.includes(String(itemId))) {
+    return true;
+  }
+
+  const productRelationText = relation === 'brand'
+    ? getProductBrandMatchText(product)
+    : getProductCategoryMatchText(product);
+
+  return Boolean(
+    itemName
+      && productRelationText
+      && (productRelationText.includes(itemName) || itemName.includes(productRelationText)),
+  );
+};
+
 const normalizeImageUrl = (value: any, fallback: string) => {
   const raw = typeof value === 'string' ? value.trim() : '';
   if (!raw) return fallback;
@@ -322,7 +431,16 @@ const getProductImageUrls = (product: any): string[] => {
     .map((value) => normalizeImageUrl(value, ''))
     .filter((url) => Boolean(url) && !seen.has(url) && Boolean(seen.add(url)));
 
-  return urls.length ? urls.slice(0, 4) : [DEFAULT_PRODUCT_IMAGE];
+  if (urls.length) return urls.slice(0, 4);
+
+  const category = getProductCategoryMatchText(product);
+  if (/(nail|makeup|beauty|cosmetic)/.test(category)) {
+    return ['https://images.unsplash.com/photo-1512496015851-a90fb38ba796?auto=format&fit=crop&w=600&q=75'];
+  }
+  if (/(tool|clipper|scissor|barber|brush|comb)/.test(category)) {
+    return ['https://images.unsplash.com/photo-1515377905703-c4788e51af15?auto=format&fit=crop&w=600&q=75'];
+  }
+  return [DEFAULT_PRODUCT_IMAGE];
 };
 
 const getCategoryIconVisual = (categoryName: string) => {
@@ -476,11 +594,39 @@ const requestJson = async (
   };
 };
 
+const fetchPublicCatalogProducts = async (token: string | null) => {
+  const pageSize = 100;
+  const allProducts: any[] = [];
+  let page = 1;
+  let lastResponse: any = { ok: false, status: 0, data: null };
+
+  // The public catalog is paginated so stores with more than 100 products are
+  // fully available on category and brand screens, not just on the home rail.
+  while (page <= 100) {
+    const response = await requestJson(`/api/catalog/products/?page=${page}&page_size=${pageSize}`, {}, token);
+    lastResponse = response;
+    if (!response.ok) {
+      return { response, products: normalizeProductsPayload(allProducts) };
+    }
+
+    const pageProducts = normalizeProductsPayload(getCollectionPayload(response.data, 'products'));
+    allProducts.push(...pageProducts);
+    const total = Number(response.data?.count);
+
+    if (!pageProducts.length || (Number.isFinite(total) && allProducts.length >= total) || !response.data?.next) {
+      break;
+    }
+    page += 1;
+  }
+
+  return { response: lastResponse, products: normalizeProductsPayload(allProducts) };
+};
+
 const navItems = [
   { key: 'Home', label: 'Home', icon: '⌂' },
-  { key: 'Categories', label: 'Categories', icon: '▦' },
-  { key: 'Orders', label: 'Orders', icon: '▤' },
   { key: 'Cart', label: 'Cart', icon: '🛒' },
+  { key: 'Orders', label: 'Orders', icon: '▤' },
+  { key: 'Categories', label: 'Categories', icon: '▦' },
   { key: 'Profile', label: 'Profile', icon: '♙' },
 ];
 
@@ -529,7 +675,8 @@ function SplashScreen() {
 export default function App() {
   const { width } = useWindowDimensions();
   const isCompact = width < 380;
-  const productCardWidth = Math.min(174, width - 44);
+  const productCardWidth = Math.min(174, Math.max(148, width - 44));
+  const miniProductCardWidth = Math.min(150, Math.max(126, Math.round(width * 0.36)));
   const categoryCardWidth = Math.min(84, Math.max(70, width * 0.21));
   const [banners, setBanners] = useState<any[]>([]);
   const [categories, setCategories] = useState<any[]>([]);
@@ -538,6 +685,7 @@ export default function App() {
   const [orders, setOrders] = useState<any[]>([]);
   const [cart, setCart] = useState<any>({ items: [] });
   const [profile, setProfile] = useState<any>(null);
+  const [resetEmail, setResetEmail] = useState('');
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -573,6 +721,7 @@ export default function App() {
   const [wishlist, setWishlist] = useState<any[]>([]);
   const [recentlyViewed, setRecentlyViewed] = useState<any[]>([]);
   const [notificationEnabled, setNotificationEnabled] = useState(true);
+  const [notificationPreferenceHydrated, setNotificationPreferenceHydrated] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -583,17 +732,23 @@ export default function App() {
   const [profileAuthFirstName, setProfileAuthFirstName] = useState('');
   const [profileAuthLastName, setProfileAuthLastName] = useState('');
   const [profileAuthPhone, setProfileAuthPhone] = useState('');
+  const [profileAuthSalonName, setProfileAuthSalonName] = useState('');
+  const [profileAuthDistrict, setProfileAuthDistrict] = useState('');
+  const [profileAuthVillage, setProfileAuthVillage] = useState('');
   const [profileAuthError, setProfileAuthError] = useState<string | null>(null);
   const [profileAuthLoading, setProfileAuthLoading] = useState(false);
+  const [showPasswordRecovery, setShowPasswordRecovery] = useState(false);
+  const [recoveryIdentifier, setRecoveryIdentifier] = useState('');
+  const [recoveryUid, setRecoveryUid] = useState('');
+  const [recoveryToken, setRecoveryToken] = useState('');
+  const [recoveryPassword, setRecoveryPassword] = useState('');
+  const [recoveryPasswordConfirm, setRecoveryPasswordConfirm] = useState('');
   const [postLoginRoute, setPostLoginRoute] = useState<'profile' | 'checkout' | 'orders'>('profile');
-  const [cartFeedback, setCartFeedback] = useState<string | null>(null);
   const [cartQuantities, setCartQuantities] = useState<Record<number, number>>({});
-  const [showCartSummary, setShowCartSummary] = useState(false);
+  const [cartFeedback, setCartFeedback] = useState<string | null>(null);
   const [cartHydrated, setCartHydrated] = useState(false);
   const [checkoutNotice, setCheckoutNotice] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [verificationSent, setVerificationSent] = useState(false);
-  const [resetSent, setResetSent] = useState(false);
-  const [resetEmail, setResetEmail] = useState('');
   const [deliveryAddress, setDeliveryAddress] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('Cash on delivery');
   const [savingPaymentMethod, setSavingPaymentMethod] = useState(false);
@@ -602,8 +757,10 @@ export default function App() {
   const [savedAddresses, setSavedAddresses] = useState<any[]>([]);
   const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
   const [newAddressLabel, setNewAddressLabel] = useState('Home');
-  const [newAddressLine, setNewAddressLine] = useState('');
+  const [newAddressDistrict, setNewAddressDistrict] = useState('');
+  const [newAddressVillage, setNewAddressVillage] = useState('');
   const [newAddressPhone, setNewAddressPhone] = useState('');
+  const [appNotifications, setAppNotifications] = useState<any[]>([]);
   const ordersRequestRef = useRef<string | null>(null);
   const ordersFetchInFlightRef = useRef(false);
 
@@ -614,8 +771,9 @@ export default function App() {
 
   const selectAddress = (address: any) => {
     setSelectedAddressId(address.id);
-    setDeliveryAddress(address.address || '');
-    setProfile((prev: any) => (prev ? { ...prev, address: address.address || prev.address } : prev));
+    const addressText = formatDeliveryLocation(address.district || '', address.village || '') || address.address || '';
+    setDeliveryAddress(addressText);
+    setProfile((prev: any) => (prev ? { ...prev, address: addressText, district: address.district || prev.district, village: address.village || prev.village } : prev));
   };
 
   const saveProfileDetails = () => {
@@ -631,15 +789,19 @@ export default function App() {
   };
 
   const saveNewAddress = () => {
-    if (!newAddressLine.trim()) {
-      Alert.alert('Address required', 'Please enter a delivery address before saving.');
+    if (!newAddressDistrict || !newAddressVillage) {
+      Alert.alert('Delivery location required', 'Please choose both a district and village or area.');
       return;
     }
+
+    const addressText = formatDeliveryLocation(newAddressDistrict, newAddressVillage);
 
     const addressEntry = {
       id: `addr-${Date.now()}`,
       label: newAddressLabel.trim() || 'Home',
-      address: newAddressLine.trim(),
+      address: addressText,
+      district: newAddressDistrict,
+      village: newAddressVillage,
       phone: newAddressPhone.trim(),
       isDefault: savedAddresses.length === 0,
     };
@@ -649,7 +811,8 @@ export default function App() {
     setDeliveryAddress(addressEntry.address);
     setProfile((prev: any) => (prev ? { ...prev, address: addressEntry.address } : prev));
     setNewAddressLabel('Home');
-    setNewAddressLine('');
+    setNewAddressDistrict('');
+    setNewAddressVillage('');
     setNewAddressPhone('');
     Alert.alert('Address saved', 'Your new address has been added and selected for delivery.');
   };
@@ -761,12 +924,25 @@ export default function App() {
       // Send the access token when available. The deployed API protects its
       // catalog endpoints, while local development may allow guest browsing.
       console.log('[API] Fetching the public home catalog...');
-      const [bannerRes, categoryRes, brandRes, bestSellerRes] = await Promise.all([
+      const [bannerRes, categoryRes, brandRes, catalogLoad] = await Promise.all([
         requestJson('/api/banners/'),
         requestJson('/api/categories/'),
         requestJson('/api/brands/'),
-        requestJson('/api/products/best-sellers/', {}, token),
+        fetchPublicCatalogProducts(token),
       ]);
+      let catalogRes = catalogLoad.response;
+      let catalogProducts = catalogLoad.products;
+
+      // Keep existing installations useful until their backend has deployed
+      // the new catalog route. The fallback is intentionally only a fallback:
+      // it remains capped, whereas the catalog route loads every page.
+      if (!catalogRes.ok) {
+        const legacyProductsRes = await requestJson('/api/products/best-sellers/', {}, token);
+        if (legacyProductsRes.ok) {
+          catalogRes = legacyProductsRes;
+          catalogProducts = normalizeProductsPayload(getCollectionPayload(legacyProductsRes.data, 'products'));
+        }
+      }
 
       const authRequests = isAuthenticatedLoad ? [
         requestJson('/api/cart/', {}, token),
@@ -781,7 +957,7 @@ export default function App() {
       if (isAuthenticatedLoad) {
       console.log('[API] Banners:', bannerRes.ok ? '✓' : `✗ (${bannerRes.status})`);
       console.log('[API] Categories:', categoryRes.ok ? '✓' : `✗ (${categoryRes.status})`);
-      console.log('[API] Public products:', bestSellerRes.ok ? '✓' : `✗ (${bestSellerRes.status})`);
+      console.log('[API] Public catalog:', catalogRes.ok ? '✓' : `✗ (${catalogRes.status})`);
       console.log('[API] Cart:', cartRes.ok ? '✓' : `✗ (${cartRes.status})`);
       console.log('[API] Profile:', profileRes.ok ? '✓' : `✗ (${profileRes.status})`);
       console.log('[API] Orders:', ordersRes.ok ? '✓' : `✗ (${ordersRes.status})`);
@@ -789,15 +965,16 @@ export default function App() {
       }
 
       // Update state with responses (show partial data if some calls fail)
-      const publicBestSellers = getCollectionPayload(bestSellerRes.data, 'products');
-      const nextProducts = normalizeProductsPayload(publicBestSellers);
+      const nextProducts = catalogProducts;
       console.log('[API] Loaded products count:', nextProducts.length);
       const apiBrands = normalizeBrandsPayload(getCollectionPayload(brandRes.data, 'brands'));
       setBanners(getCollectionPayload(bannerRes.data, 'banners'));
       setCategories(normalizeCategoriesPayload(getCollectionPayload(categoryRes.data, 'categories')));
       setBrands(apiBrands.length ? apiBrands : getBrandsFromProducts(nextProducts));
       setProducts(nextProducts);
-      setCart(cartRes.ok && cartRes.data ? cartRes.data : { items: [] });
+      const nextCart = cartRes.ok && cartRes.data ? cartRes.data : { items: [] };
+      setCart(nextCart);
+      setCartQuantities(Object.fromEntries((nextCart.items || []).map((item: any) => [item.product_id ?? item.id, Number(item.quantity || 0)])));
       
       const profileData = profileRes.ok ? profileRes.data : null;
       setProfile(profileData);
@@ -830,7 +1007,7 @@ export default function App() {
       }
 
       // Only surface a startup error if all primary home-data endpoints fail.
-      const criticalResponses = [bannerRes, categoryRes, bestSellerRes];
+      const criticalResponses = [bannerRes, categoryRes, catalogRes];
       const successfulCriticalResponses = criticalResponses.filter((response) => response.ok).length;
       const failedCriticalResponses = criticalResponses.filter((response) => !response.ok).length;
 
@@ -928,12 +1105,6 @@ export default function App() {
   }, [cart, cartHydrated]);
 
   useEffect(() => {
-    if (!cartFeedback) return;
-    const timer = setTimeout(() => setCartFeedback(null), 1800);
-    return () => clearTimeout(timer);
-  }, [cartFeedback]);
-
-  useEffect(() => {
     if (!checkoutNotice) return;
     const timer = setTimeout(() => setCheckoutNotice(null), 4000);
     return () => clearTimeout(timer);
@@ -957,27 +1128,21 @@ export default function App() {
             id: entry.id || `addr-${index}`,
             label: entry.label || entry.name || 'Saved address',
             address: entry.address || entry.line || entry.location || '',
+            district: entry.district || '',
+            village: entry.village || entry.city || '',
             phone: entry.phone || entry.phone_number || '',
             isDefault: Boolean(entry.is_default || entry.default || index === 0),
           }))
         : [];
 
-      if (profile.address && !normalizedAddresses.some((entry: any) => entry.address === profile.address)) {
+      if (profile.district && profile.village && !normalizedAddresses.some((entry: any) => entry.district === profile.district && entry.village === profile.village)) {
         normalizedAddresses.unshift({
           id: 'profile-address',
           label: 'Primary',
-          address: profile.address,
+          address: formatDeliveryLocation(profile.district, profile.village),
+          district: profile.district,
+          village: profile.village,
           phone: profile.phone_number || '',
-          isDefault: true,
-        });
-      }
-
-      if (!normalizedAddresses.length) {
-        normalizedAddresses.push({
-          id: 'default-address',
-          label: 'Default',
-          address: profile.address || 'Plot 12, Kisementi Road, Kampala',
-          phone: profile.phone_number || '+256 700 123 456',
           isDefault: true,
         });
       }
@@ -993,6 +1158,38 @@ export default function App() {
       }
     }
   }, [profile]);
+
+  useEffect(() => {
+    const loadNotificationPreference = async () => {
+      try {
+        const savedPreference = await AsyncStorage.getItem(NOTIFICATION_PREFERENCE_STORAGE_KEY);
+        if (savedPreference !== null) setNotificationEnabled(savedPreference === 'true');
+      } finally {
+        setNotificationPreferenceHydrated(true);
+      }
+    };
+    void loadNotificationPreference();
+  }, []);
+
+  useEffect(() => {
+    if (!notificationPreferenceHydrated) return;
+    void AsyncStorage.setItem(NOTIFICATION_PREFERENCE_STORAGE_KEY, String(notificationEnabled));
+  }, [notificationEnabled, notificationPreferenceHydrated]);
+
+  useEffect(() => {
+    if (!authToken || !notificationEnabled) {
+      setAppNotifications([]);
+      return;
+    }
+    let active = true;
+    const loadNotifications = async () => {
+      const response = await requestJson('/api/notifications/', { method: 'GET' }, authToken);
+      if (active && response.ok) setAppNotifications(Array.isArray(response.data) ? response.data : []);
+    };
+    void loadNotifications();
+    const refresh = setInterval(() => void loadNotifications(), 30000);
+    return () => { active = false; clearInterval(refresh); };
+  }, [authToken, notificationEnabled]);
 
   const getOrderTrackingSteps = (order: any) => {
     const status = (order?.order_status || 'Pending').toLowerCase();
@@ -1112,9 +1309,15 @@ export default function App() {
       setCheckoutNotice({ type: 'error', message: 'Sign in to retry placing the order.' });
       return;
     }
+    const selectedAddress = savedAddresses.find((entry: any) => entry.id === selectedAddressId);
+    if (!selectedAddress?.district || !selectedAddress?.village) {
+      setCheckoutNotice({ type: 'error', message: 'Choose a district and village or area before retrying your order.' });
+      return;
+    }
     try {
       const payload = {
-        delivery_address: deliveryAddress.trim() || '',
+        district: selectedAddress.district,
+        village: selectedAddress.village,
         phone_number: profile?.phone_number || '',
         payment_method: mapPaymentMethodToApiValue(localOrder.payment_method || paymentMethod || ''),
         notes: localOrder.notes || '',
@@ -1184,28 +1387,53 @@ export default function App() {
     });
   };
 
+  const applyServerCart = (serverCart: any) => {
+    if (!serverCart || !Array.isArray(serverCart.items)) return;
+    setCart(serverCart);
+    setCartQuantities(Object.fromEntries(serverCart.items.map((item: any) => [item.product_id ?? item.id, Number(item.quantity || 0)])));
+  };
+
+  const refreshServerCart = async (token: string) => {
+    const response = await requestJson('/api/cart/', {}, token);
+    if (response.ok) applyServerCart(response.data);
+    return response;
+  };
+
   const handleAddToCart = async (productId: number, quantity: number = 1, product?: any) => {
+    if (product && isProductOutOfStock(product)) {
+      setError('This product is currently out of stock.');
+      return;
+    }
     const currentQty = cartQuantities[productId] || 0;
     const nextQty = currentQty + quantity;
     setCartQuantities((prev) => ({ ...prev, [productId]: nextQty }));
     syncCartWithQuantity(productId, nextQty, product);
-    setCartFeedback('Added to cart');
 
     if (!authToken) {
       return;
     }
 
     try {
-      await requestJson('/api/cart/add/', {
+      const response = await requestJson('/api/cart/add/', {
         method: 'POST',
         body: JSON.stringify({ product_id: productId, quantity }),
       }, authToken);
+      if (!response.ok) {
+        await refreshServerCart(authToken);
+        setError(getApiErrorMessage(response.data, 'Unable to add this product to your cart.'));
+        return;
+      }
+      await refreshServerCart(authToken);
     } catch (e) {
       setError('Unable to sync cart to server right now.');
     }
   };
 
-  const adjustProductQuantity = (productId: number, delta: number, product?: any) => {
+  const adjustProductQuantity = async (productId: number, delta: number, product?: any) => {
+    if (delta > 0 && product && isProductOutOfStock(product)) {
+      setError('This product is currently out of stock.');
+      return;
+    }
     const currentQty = cartQuantities[productId] || 0;
     const nextQty = Math.max(0, currentQty + delta);
     setCartQuantities((prev) => {
@@ -1217,16 +1445,31 @@ export default function App() {
       return { ...prev, [productId]: nextQty };
     });
     syncCartWithQuantity(productId, nextQty, product);
-    if (nextQty > 0) {
-      setCartFeedback('Quantity updated');
+
+    if (!authToken) return;
+    try {
+      if (delta > 0) {
+        const response = await requestJson('/api/cart/add/', { method: 'POST', body: JSON.stringify({ product_id: productId, quantity: delta }) }, authToken);
+        if (!response.ok) setError(getApiErrorMessage(response.data, 'Unable to update cart quantity.'));
+      } else {
+        const cartItem = (cart?.items || []).find((item: any) => Number(item.product_id ?? item.id) === Number(productId));
+        if (!cartItem?.id) {
+          await refreshServerCart(authToken);
+          return;
+        }
+        const response = await requestJson('/api/cart/update/', { method: 'PATCH', body: JSON.stringify({ cart_item_id: cartItem.id, quantity: nextQty }) }, authToken);
+        if (response.ok) applyServerCart(response.data);
+        else setError(getApiErrorMessage(response.data, 'Unable to update cart quantity.'));
+      }
+      await refreshServerCart(authToken);
+    } catch {
+      setError('Unable to sync cart to server right now.');
     }
   };
 
   const cartCount = (cart?.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 1), 0);
-
-  useEffect(() => {
-    setShowCartSummary(cartCount > 0);
-  }, [cartCount]);
+  const getCartItemTotal = (item: any) => Number(item?.quantity || 1) * Number(item?.price ?? item?.selling_price ?? item?.product?.selling_price ?? 0);
+  const cartSubtotal = (cart?.items || []).reduce((sum: number, item: any) => sum + getCartItemTotal(item), 0);
 
   const isAuthenticated = Boolean(authToken);
   const profileName = profile ? `${profile.first_name || ''} ${profile.last_name || ''}`.trim() : 'Guest User';
@@ -1290,14 +1533,68 @@ export default function App() {
     return false;
   };
 
+  const submitPasswordRecovery = async () => {
+    setProfileAuthError(null);
+    setProfileAuthLoading(true);
+    try {
+      if (!recoveryUid || !recoveryToken) {
+        if (!recoveryIdentifier.trim()) {
+          setProfileAuthError('Enter the email address or phone number on your account.');
+          return;
+        }
+        const response = await requestJson('/api/auth/forgot-password/', {
+          method: 'POST',
+          body: JSON.stringify({ identifier: recoveryIdentifier.trim() }),
+        });
+        if (!response.ok) {
+          setProfileAuthError(getApiErrorMessage(response.data, 'We could not start your password reset.'));
+          return;
+        }
+        if (!response.data?.uid || !response.data?.token) {
+          setProfileAuthError('If an account matches those details, password reset instructions will be available shortly.');
+          return;
+        }
+        setRecoveryUid(response.data.uid);
+        setRecoveryToken(response.data.token);
+        return;
+      }
+
+      if (recoveryPassword.length < 8) {
+        setProfileAuthError('Use at least 8 characters for your new password.');
+        return;
+      }
+      if (recoveryPassword !== recoveryPasswordConfirm) {
+        setProfileAuthError('The two new passwords do not match.');
+        return;
+      }
+      const response = await requestJson('/api/auth/reset-password/', {
+        method: 'POST',
+        body: JSON.stringify({ uid: recoveryUid, token: recoveryToken, new_password: recoveryPassword, confirm_password: recoveryPasswordConfirm }),
+      });
+      if (!response.ok) {
+        setProfileAuthError(getApiErrorMessage(response.data, 'We could not reset your password. Please try again.'));
+        return;
+      }
+      setShowPasswordRecovery(false);
+      setRecoveryUid('');
+      setRecoveryToken('');
+      setRecoveryPassword('');
+      setRecoveryPasswordConfirm('');
+      setProfileAuthMode('login');
+      setProfileAuthError('Password updated. Sign in with your new password.');
+    } finally {
+      setProfileAuthLoading(false);
+    }
+  };
+
   const submitProfileAuth = async () => {
     const isLogin = profileAuthMode === 'login';
     const email = profileAuthEmail.trim();
     const password = profileAuthPassword;
     setProfileAuthError(null);
 
-    if (!email || !password || (!isLogin && (!profileAuthFirstName.trim() || !profileAuthLastName.trim() || !profileAuthPhone.trim()))) {
-      setProfileAuthError('Please complete all required fields.');
+    if (!password || (!isLogin && (!profileAuthFirstName.trim() || !profileAuthLastName.trim() || !profileAuthSalonName.trim() || !profileAuthDistrict || !profileAuthVillage || (!email && !profileAuthPhone.trim())))) {
+      setProfileAuthError(isLogin ? 'Enter your email or phone number and password.' : 'Enter your salon details, password, and at least an email address or phone number.');
       return;
     }
 
@@ -1311,29 +1608,35 @@ export default function App() {
             email,
             phone_number: profileAuthPhone.trim(),
             password,
+            salon_name: profileAuthSalonName.trim(),
+            location: formatDeliveryLocation(profileAuthDistrict, profileAuthVillage),
+            district: profileAuthDistrict,
+            village: profileAuthVillage,
           }) });
 
       if (!response.ok) {
-        setProfileAuthError(response.data?.detail || response.data?.error || (isLogin ? 'Login failed. Check your details and try again.' : 'Account creation failed. Try again.'));
-        return;
-      }
-
-      if (!isLogin) {
-        setProfileAuthMode('login');
-        setProfileAuthPassword('');
-        setProfileAuthError('Account created. Please sign in.');
+        setProfileAuthError(getApiErrorMessage(response.data, isLogin ? 'Login failed. Check your details and try again.' : 'Account creation failed. Try again.'));
         return;
       }
 
       const token = response.data?.access;
       if (!token) {
-        setProfileAuthError('Login succeeded but no access token was returned.');
+        setProfileAuthError(isLogin ? 'Login succeeded but no access token was returned.' : 'Account created but could not sign you in. Please sign in.');
         return;
       }
 
       setAuthToken(token);
       await AsyncStorage.setItem(AUTH_TOKEN_STORAGE_KEY, token);
       await loadHomeData(false, token);
+      if (!isLogin) {
+        setProfileAuthFirstName('');
+        setProfileAuthLastName('');
+        setProfileAuthPhone('');
+        setProfileAuthSalonName('');
+        setProfileAuthDistrict('');
+        setProfileAuthVillage('');
+        setProfileAuthEmail('');
+      }
       setProfileAuthPassword('');
       if (postLoginRoute === 'orders') {
         setActiveTab('Orders');
@@ -1385,12 +1688,11 @@ export default function App() {
 
     const productsForCatalog = products.filter((product: any) => {
       if (selectedLabel === allLabel) return true;
-      const productRelationIds = getProductRelationIds(product, isBrandMode ? 'brand' : 'category');
-      if (selectedId && productRelationIds.includes(selectedId)) return true;
-
-      const normalizedSelectedLabel = selectedLabel.toLowerCase();
-      const productCatalogText = isBrandMode ? getProductBrandMatchText(product) : getProductCategoryMatchText(product);
-      return productCatalogText.includes(normalizedSelectedLabel) || normalizedSelectedLabel.includes(productCatalogText);
+      return productMatchesCatalogItem(product, {
+        id: selectedId,
+        category_name: isBrandMode ? undefined : selectedLabel,
+        brand_name: isBrandMode ? selectedLabel : undefined,
+      }, isBrandMode ? 'brand' : 'category');
     });
 
     const filteredCategoryProducts = productsForCatalog.filter((product: any) => {
@@ -1436,13 +1738,18 @@ export default function App() {
         <View style={styles.searchBarCategories}>
           <TextInput style={styles.searchInput} placeholder="Search products..." placeholderTextColor="#9CA3AF" value={searchTerm} onChangeText={setSearchTerm} />
           <TouchableOpacity style={styles.searchButton}>
-            <Text style={styles.searchButtonIcon}>⌕</Text>
+            <Text style={styles.searchButtonIcon}>🔍</Text>
           </TouchableOpacity>
         </View>
 
         <View style={styles.categorySplitView}>
           {showSidebar ? (
-            <View style={styles.categorySidebar}>
+            <ScrollView
+              style={styles.categorySidebar}
+              contentContainerStyle={styles.categorySidebarContent}
+              nestedScrollEnabled
+              showsVerticalScrollIndicator
+            >
               {sidebarItems.map((item, index) => {
                 const active = item.title === selectedLabel;
                 return (
@@ -1462,7 +1769,7 @@ export default function App() {
                   </TouchableOpacity>
                 );
               })}
-            </View>
+            </ScrollView>
           ) : null}
           <View style={styles.categoryContentArea}>
             <View style={styles.categoryIntroCard}>
@@ -1506,6 +1813,7 @@ export default function App() {
                   <View style={styles.productGrid}>
                     {sortedCategoryProducts.map((item: any, index: number) => {
                       const isSaved = wishlist.some((entry: any) => entry.id === item.id);
+                      const outOfStock = isProductOutOfStock(item);
                       return (
                         <TouchableOpacity key={getListItemKey(item, index, 'category-product')} style={styles.productGridCard} onPress={() => openProductDetail(item)}>
                           <CatalogImage uri={getProductImageUrls(item)[0]} style={styles.productGridImage} />
@@ -1515,14 +1823,14 @@ export default function App() {
                           <View style={styles.productGridContent}>
                             <View style={styles.productGridMetaRow}>
                               <View style={styles.productGridBadge}>
-                                <Text style={styles.productGridBadgeText}>{selectedLabel}</Text>
+                                <Text style={styles.productGridBadgeText} numberOfLines={1}>{selectedLabel}</Text>
                               </View>
-                              <Text style={styles.productGridDeliveryText}>Fast delivery</Text>
+                              <Text style={[styles.productGridDeliveryText, outOfStock && styles.outOfStockText]} numberOfLines={1}>{outOfStock ? 'Out of stock' : 'In stock'}</Text>
                             </View>
-                            <Text style={styles.productGridName}>{item.product_name}</Text>
-                            <Text style={styles.productGridPrice}>UGX {Number(item.selling_price ?? 0).toLocaleString('en-US')}</Text>
-                            <TouchableOpacity style={styles.productGridCartButton} onPress={(event: any) => { event?.stopPropagation?.(); handleAddToCart(item.id, 1, item); }}>
-                              <Text style={styles.productGridCartButtonText}>Add to cart</Text>
+                            <Text style={styles.productGridName} numberOfLines={2}>{item.product_name}</Text>
+                            <Text style={styles.productGridPrice} numberOfLines={1}>UGX {Number(item.selling_price ?? 0).toLocaleString('en-US')}</Text>
+                            <TouchableOpacity disabled={outOfStock} style={[styles.productGridCartButton, outOfStock && styles.productGridCartButtonDisabled]} onPress={(event: any) => { event?.stopPropagation?.(); handleAddToCart(item.id, 1, item); }}>
+                              <Text style={styles.productGridCartButtonText}>{outOfStock ? 'Out of stock' : 'Add to cart'}</Text>
                             </TouchableOpacity>
                           </View>
                         </TouchableOpacity>
@@ -1744,6 +2052,7 @@ export default function App() {
 
     if (!isAuthenticated && profileRoute === 'login') {
       const isLogin = profileAuthMode === 'login';
+      const isRecovery = showPasswordRecovery;
       return (
         <ScrollView style={styles.profilePage} contentContainerStyle={styles.profilePageContent} keyboardShouldPersistTaps="handled">
           <View style={styles.profileHeaderBlock}>
@@ -1752,26 +2061,72 @@ export default function App() {
               <Text style={styles.profileHeaderTitle}>My Profile</Text>
               <View style={styles.profileHeaderBack} />
             </View>
-            <Text style={styles.profileHeaderScreenTitle}>{isLogin ? 'Welcome back' : 'Create your account'}</Text>
+            <View style={styles.profileAuthLogoRow}>
+              <Image source={{ uri: SPLASH_LOGO_URL }} style={styles.profileAuthLogo} resizeMode="cover" />
+              <View>
+                <Text style={styles.profileAuthBrand}>GLOW</Text>
+                <Text style={styles.profileAuthBrandNote}>SALON SUPPLIES, DELIVERED.</Text>
+              </View>
+            </View>
+            <Text style={styles.profileHeaderScreenTitle}>{isRecovery ? 'Reset your password' : isLogin ? 'Welcome back' : 'Create your account'}</Text>
+            <Text style={styles.profileHeaderSubtitle}>{isRecovery ? 'Choose a new password to get back into Glow.' : isLogin ? 'Sign in and continue where you left off.' : 'Set up your salon in a few simple steps.'}</Text>
           </View>
           <View style={styles.profileAuthCard}>
-            <Text style={styles.profileAuthTitle}>{isLogin ? 'Sign in to continue' : 'Join Glow'}</Text>
-            <Text style={styles.profileAuthText}>{isLogin ? 'Sign in to checkout, place orders, and track deliveries.' : 'Create an account to order salon essentials and track delivery.'}</Text>
-            {!isLogin ? (
+            <View style={styles.profileAuthPill}><Text style={styles.profileAuthPillText}>{isRecovery ? 'ACCOUNT RECOVERY' : isLogin ? 'MEMBER ACCESS' : 'SALON SETUP'}</Text></View>
+            <Text style={styles.profileAuthTitle}>{isRecovery ? (recoveryUid ? 'Choose a new password' : 'Find your account') : isLogin ? 'Sign in to Glow' : 'Make your salon account'}</Text>
+            <Text style={styles.profileAuthText}>{isRecovery ? (recoveryUid ? 'Use a secure password that you have not used before.' : 'Enter the email address or phone number used when you created your account.') : isLogin ? 'Use the email address or phone number on your account.' : 'Your salon name and location help us deliver the right supplies to you.'}</Text>
+            {isRecovery ? (
               <>
-                <TextInput style={styles.inputField} value={profileAuthFirstName} onChangeText={setProfileAuthFirstName} placeholder="First name" placeholderTextColor="#9CA3AF" />
-                <TextInput style={styles.inputField} value={profileAuthLastName} onChangeText={setProfileAuthLastName} placeholder="Last name" placeholderTextColor="#9CA3AF" />
-                <TextInput style={styles.inputField} value={profileAuthPhone} onChangeText={setProfileAuthPhone} placeholder="Phone number" keyboardType="phone-pad" placeholderTextColor="#9CA3AF" />
+                {!recoveryUid ? (
+                  <>
+                    <Text style={styles.profileAuthFieldLabel}>EMAIL OR PHONE NUMBER</Text>
+                    <TextInput style={styles.inputField} value={recoveryIdentifier} onChangeText={setRecoveryIdentifier} placeholder="Email address or phone number" autoCapitalize="none" placeholderTextColor="#94A3B8" />
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.profileAuthFieldLabel}>NEW PASSWORD</Text>
+                    <TextInput style={styles.inputField} value={recoveryPassword} onChangeText={setRecoveryPassword} placeholder="At least 8 characters" secureTextEntry placeholderTextColor="#94A3B8" />
+                    <Text style={styles.profileAuthFieldLabel}>CONFIRM NEW PASSWORD</Text>
+                    <TextInput style={styles.inputField} value={recoveryPasswordConfirm} onChangeText={setRecoveryPasswordConfirm} placeholder="Enter the password again" secureTextEntry placeholderTextColor="#94A3B8" />
+                  </>
+                )}
+              </>
+            ) : !isLogin ? (
+              <>
+                <Text style={styles.profileAuthFieldLabel}>YOUR NAME</Text>
+                <View style={styles.profileAuthInlineFields}>
+                  <TextInput style={[styles.inputField, styles.profileAuthHalfField]} value={profileAuthFirstName} onChangeText={setProfileAuthFirstName} placeholder="First name" placeholderTextColor="#94A3B8" />
+                  <TextInput style={[styles.inputField, styles.profileAuthHalfField]} value={profileAuthLastName} onChangeText={setProfileAuthLastName} placeholder="Last name" placeholderTextColor="#94A3B8" />
+                </View>
+                <Text style={styles.profileAuthFieldLabel}>YOUR SALON</Text>
+                <TextInput style={styles.inputField} value={profileAuthSalonName} onChangeText={setProfileAuthSalonName} placeholder="Salon name" placeholderTextColor="#94A3B8" />
+                <Text style={styles.profileAuthFieldLabel}>SALON DELIVERY LOCATION</Text>
+                <DeliveryLocationSelector district={profileAuthDistrict} village={profileAuthVillage} onDistrictChange={setProfileAuthDistrict} onVillageChange={setProfileAuthVillage} />
               </>
             ) : null}
-            <TextInput style={styles.inputField} value={profileAuthEmail} onChangeText={setProfileAuthEmail} placeholder="Email address" keyboardType="email-address" autoCapitalize="none" placeholderTextColor="#9CA3AF" />
-            <TextInput style={styles.inputField} value={profileAuthPassword} onChangeText={setProfileAuthPassword} placeholder="Password" secureTextEntry placeholderTextColor="#9CA3AF" />
+            {!isRecovery ? <>
+              <Text style={styles.profileAuthFieldLabel}>{isLogin ? 'EMAIL OR PHONE NUMBER' : 'HOW WE CAN REACH YOU'}</Text>
+              <TextInput style={styles.inputField} value={profileAuthEmail} onChangeText={setProfileAuthEmail} placeholder={isLogin ? 'Email address or phone number' : 'Email address (optional)'} keyboardType={isLogin ? 'default' : 'email-address'} autoCapitalize="none" placeholderTextColor="#94A3B8" />
+              {!isLogin ? <TextInput style={styles.inputField} value={profileAuthPhone} onChangeText={setProfileAuthPhone} placeholder="Phone number (optional)" keyboardType="phone-pad" placeholderTextColor="#94A3B8" /> : null}
+              <Text style={styles.profileAuthFieldLabel}>PASSWORD</Text>
+              <TextInput style={styles.inputField} value={profileAuthPassword} onChangeText={setProfileAuthPassword} placeholder="At least 8 characters" secureTextEntry placeholderTextColor="#94A3B8" />
+              {!isLogin ? <Text style={styles.profileAuthHint}>Enter an email address, phone number, or both. You can use either one to sign in.</Text> : null}
+            </> : null}
             {profileAuthError ? <Text style={styles.profileAuthError}>{profileAuthError}</Text> : null}
-            <TouchableOpacity style={styles.profileAuthPrimaryButton} onPress={submitProfileAuth} disabled={profileAuthLoading}>
-              {profileAuthLoading ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.primaryButtonText}>{isLogin ? 'Login' : 'Create account'}</Text>}
+            <TouchableOpacity style={styles.profileAuthPrimaryButton} onPress={isRecovery ? submitPasswordRecovery : submitProfileAuth} disabled={profileAuthLoading}>
+              {profileAuthLoading ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.primaryButtonText}>{isRecovery ? (recoveryUid ? 'Reset password' : 'Continue') : isLogin ? 'Login' : 'Create account'}</Text>}
             </TouchableOpacity>
-            <TouchableOpacity style={styles.profileAuthSecondaryButton} onPress={() => { setProfileAuthMode(isLogin ? 'signup' : 'login'); setProfileAuthError(null); }}>
-              <Text style={styles.profileAuthSecondaryText}>{isLogin ? 'Create an account' : 'I already have an account'}</Text>
+            {isLogin && !isRecovery ? <TouchableOpacity style={styles.forgotPasswordButton} onPress={() => { setShowPasswordRecovery(true); setProfileAuthError(null); }}>
+              <Text style={styles.forgotPasswordText}>Forgot password?</Text>
+            </TouchableOpacity> : null}
+            <TouchableOpacity style={styles.profileAuthSecondaryButton} onPress={() => {
+              if (isRecovery) {
+                setShowPasswordRecovery(false); setRecoveryUid(''); setRecoveryToken(''); setProfileAuthError(null);
+              } else {
+                setProfileAuthMode(isLogin ? 'signup' : 'login'); setProfileAuthError(null);
+              }
+            }}>
+              <Text style={styles.profileAuthSecondaryText}>{isRecovery ? 'Back to sign in' : isLogin ? 'Create an account' : 'I already have an account'}</Text>
             </TouchableOpacity>
           </View>
         </ScrollView>
@@ -1813,7 +2168,7 @@ export default function App() {
       about: { title: 'About Glow', body: 'Learn more about Glow, our promises, and delivery policies.' },
       settings: { title: 'Settings', body: 'Fine-tune your app experience, notifications, and privacy preferences.' },
       security: { title: 'Security & Privacy', body: 'Protect your account with verification, password recovery, and secure sign-in controls.' },
-      notifications: { title: 'Push Notifications', body: 'Stay updated on deliveries, tracking changes, promotions, and order milestones.' },
+      notifications: { title: 'Notifications', body: 'Stay updated on deliveries, new arrivals, and order milestones.' },
       favorites: { title: 'Favorites', body: 'Save your most-loved salon essentials for faster reordering.' },
     };
 
@@ -1849,8 +2204,8 @@ export default function App() {
     }
 
     if (profileRoute === 'cart') {
-      const subtotal = cartItems.reduce((sum: number, item: any) => sum + Number(item.quantity || 1) * 25000, 0);
-      const deliveryFee = subtotal > 0 ? 5000 : 0;
+      const subtotal = cartSubtotal;
+      const deliveryFee = 0;
       const total = subtotal + deliveryFee;
 
       return (
@@ -1873,11 +2228,7 @@ export default function App() {
                 <View style={styles.cartListContainer}>
                   {cartItems.map((item: any, index: number) => (
                     <View key={getListItemKey(item, index, 'cart-item')} style={styles.cartItemCard}>
-                      {item.image_url ? (
-                        <CatalogImage uri={getProductImageUrls(item)[0]} style={styles.cartItemImage} />
-                      ) : (
-                        <View style={styles.cartItemImagePlaceholder} />
-                      )}
+                      <CatalogImage uri={getProductImageUrls(item)[0]} style={styles.cartItemImage} />
                       <View style={styles.cartItemTextBlock}>
                         <Text style={styles.infoLabel}>Item {index + 1}</Text>
                         <Text style={styles.infoValue}>{item.product_name || `Product ${index + 1}`}</Text>
@@ -1902,7 +2253,7 @@ export default function App() {
                   </View>
                   <View style={styles.summaryRow}>
                     <Text style={styles.summaryLabel}>Delivery</Text>
-                    <Text style={styles.summaryValue}>UGX {deliveryFee.toLocaleString('en-US')}</Text>
+                    <Text style={styles.summaryValue}>Free</Text>
                   </View>
                   <View style={styles.summaryRowStrong}>
                     <Text style={styles.summaryLabelStrong}>Total</Text>
@@ -1947,8 +2298,8 @@ export default function App() {
     }
 
     if (profileRoute === 'checkout') {
-      const subtotal = cartItems.reduce((sum: number, item: any) => sum + Number(item.quantity || 1) * 25000, 0);
-      const deliveryFee = subtotal > 0 ? 5000 : 0;
+      const subtotal = cartSubtotal;
+      const deliveryFee = 0;
       const total = subtotal + deliveryFee;
 
       if (!isAuthenticated) {
@@ -2030,7 +2381,7 @@ export default function App() {
                 </View>
                 <View style={styles.summaryRow}>
                   <Text style={styles.summaryLabel}>Delivery fee</Text>
-                  <Text style={styles.summaryValue}>UGX {deliveryFee.toLocaleString('en-US')}</Text>
+                  <Text style={styles.summaryValue}>Free</Text>
                 </View>
                 <View style={styles.summaryRowStrong}>
                   <Text style={styles.summaryLabelStrong}>Total</Text>
@@ -2042,7 +2393,8 @@ export default function App() {
 
                 const normalizedItems = (cart?.items || []).filter((item: any) => Number(item.quantity || 1) > 0);
                 const hasValidQuantity = normalizedItems.every((item: any) => Number(item.quantity || 1) >= 1);
-                const trimmedAddress = deliveryAddress.trim();
+                const selectedAddress = savedAddresses.find((entry: any) => entry.id === selectedAddressId);
+                const trimmedAddress = formatDeliveryLocation(selectedAddress?.district || '', selectedAddress?.village || '');
                 const trimmedPayment = paymentMethod.trim();
 
                 if (!normalizedItems.length) {
@@ -2055,8 +2407,8 @@ export default function App() {
                   return;
                 }
 
-                if (!trimmedAddress || trimmedAddress.length < 8) {
-                  setCheckoutNotice({ type: 'error', message: 'Please enter a complete delivery address before confirming.' });
+                if (!selectedAddress || !trimmedAddress) {
+                  setCheckoutNotice({ type: 'error', message: 'Please choose a district and village or area before confirming.' });
                   return;
                 }
 
@@ -2095,7 +2447,8 @@ export default function App() {
 
                 try {
                   const payload = {
-                    delivery_address: trimmedAddress,
+                    district: selectedAddress.district,
+                    village: selectedAddress.village,
                     phone_number: profile?.phone_number || '',
                     payment_method: mapPaymentMethodToApiValue(trimmedPayment),
                     notes: '',
@@ -2166,14 +2519,7 @@ export default function App() {
                 placeholder="Label (Home, Office, Salon)"
                 placeholderTextColor="#9CA3AF"
               />
-              <TextInput
-                style={styles.addressInput}
-                value={newAddressLine}
-                onChangeText={setNewAddressLine}
-                placeholder="Enter delivery address"
-                placeholderTextColor="#9CA3AF"
-                multiline
-              />
+              <DeliveryLocationSelector district={newAddressDistrict} village={newAddressVillage} onDistrictChange={setNewAddressDistrict} onVillageChange={setNewAddressVillage} />
               <TextInput
                 style={styles.inputField}
                 value={newAddressPhone}
@@ -2253,17 +2599,15 @@ export default function App() {
             </View>
             <View style={styles.infoCard}>
               <Text style={styles.infoLabel}>Password reset</Text>
-              <TextInput
-                style={styles.inputField}
-                placeholder="Enter your email"
-                placeholderTextColor="#9CA3AF"
-                value={resetEmail}
-                onChangeText={setResetEmail}
-                autoCapitalize="none"
-                keyboardType="email-address"
-              />
-              <TouchableOpacity style={styles.secondaryButton} onPress={() => { setResetSent(true); Alert.alert('Reset link sent', 'A password reset link has been sent to your inbox.'); }}>
-                <Text style={styles.secondaryButtonText}>{resetSent ? 'Send again' : 'Send reset link'}</Text>
+              <Text style={styles.profileDetailBody}>Reset your password using the email address or phone number on your Glow account.</Text>
+              <TouchableOpacity style={styles.secondaryButton} onPress={() => {
+                setShowPasswordRecovery(true);
+                setRecoveryIdentifier(profile?.email || profile?.phone_number || '');
+                setProfileAuthError(null);
+                setActiveTab('Profile');
+                setProfileRoute('login');
+              }}>
+                <Text style={styles.secondaryButtonText}>Reset password</Text>
               </TouchableOpacity>
             </View>
             <TouchableOpacity style={styles.primaryButton} onPress={() => setProfileRoute('profile')}>
@@ -2288,12 +2632,26 @@ export default function App() {
           <View style={styles.profileDetailCard}>
             <View style={styles.notificationCard}>
               <View style={styles.notificationTextArea}>
-                <Text style={styles.infoLabel}>Push notifications</Text>
-                <Text style={styles.profileDetailBody}>Receive order updates, delivery ETA changes, and promotional offers.</Text>
+                <Text style={styles.infoLabel}>App notifications</Text>
+                <Text style={styles.profileDetailBody}>Receive order updates, delivery ETA changes, and new-arrival announcements.</Text>
               </View>
               <Switch value={notificationEnabled} onValueChange={setNotificationEnabled} thumbColor={notificationEnabled ? '#F5821F' : '#FFFFFF'} trackColor={{ false: '#D1D5DB', true: '#FDC38B' }} />
             </View>
-            <TouchableOpacity style={styles.primaryButton} onPress={() => { Alert.alert('Notifications enabled', notificationEnabled ? 'You will receive live order updates.' : 'You will not receive push updates.'); setProfileRoute('profile'); }}>
+            {notificationEnabled && (
+              <View style={styles.notificationList}>
+                {appNotifications.length ? appNotifications.slice(0, 30).map((notification: any) => (
+                  <TouchableOpacity key={notification.id} style={[styles.inAppNotification, !notification.is_read && styles.inAppNotificationUnread]} onPress={async () => {
+                    if (notification.is_read || !authToken) return;
+                    setAppNotifications((current) => current.map((item: any) => item.id === notification.id ? { ...item, is_read: true } : item));
+                    await requestJson(`/api/notifications/${notification.id}/read/`, { method: 'PATCH', body: JSON.stringify({ is_read: true }) }, authToken);
+                  }}>
+                    <Text style={styles.inAppNotificationTitle}>{notification.title}</Text>
+                    <Text style={styles.inAppNotificationMessage}>{notification.message}</Text>
+                  </TouchableOpacity>
+                )) : <Text style={styles.profileDetailBody}>No notifications yet. New arrivals and order updates will appear here.</Text>}
+              </View>
+            )}
+            <TouchableOpacity style={styles.primaryButton} onPress={() => { Alert.alert('Notifications saved', notificationEnabled ? 'You will receive live order updates and new-arrival announcements.' : 'Notifications are turned off.'); setProfileRoute('profile'); }}>
               <Text style={styles.primaryButtonText}>Save preferences</Text>
             </TouchableOpacity>
           </View>
@@ -2688,33 +3046,45 @@ const renderHomeBody = () => {
     const categoryProductGroups = categories
       .map((category) => {
         const categoryName = category.category_name || category.name;
-        const normalizedCategory = (categoryName || '').toLowerCase();
-        const items = products.filter((product: any) => {
-          const productCategory = `${product.category_name || ''} ${product.category || ''} ${product.category_id || ''}`.toLowerCase();
-          return productCategory.includes(normalizedCategory) || normalizedCategory.includes(productCategory);
-        });
+        const items = products.filter((product: any) => productMatchesCatalogItem(product, category, 'category'));
 
         return {
           categoryName,
-          items: items.slice(0, 15),
+          items,
         };
       })
       .filter((group) => group.items.length > 0);
 
-    const mixedCategoryProducts = categoryProductGroups.length
-      ? categoryProductGroups.reduce<any[]>((acc, group) => {
-          for (let index = 0; index < group.items.length; index += 1) {
-            const item = group.items[index];
-            if (item) {
-              const alreadyIncluded = acc.some((entry: any) => entry.id === item.id);
-              if (!alreadyIncluded) {
-                acc.push({ ...item, __categoryName: group.categoryName });
-              }
-            }
-          }
-          return acc;
-        }, [])
-      : products.slice(0, 24);
+    const mixedCategoryProducts: any[] = [];
+    const discoverMoreProductIds = new Set<string>();
+    const longestCategoryGroup = Math.max(0, ...categoryProductGroups.map((group) => group.items.length));
+
+    // Take one product from each category at a time so the grid stays varied,
+    // while still allowing up to 60 products to be discovered.
+    for (let productIndex = 0; productIndex < longestCategoryGroup && mixedCategoryProducts.length < DISCOVER_MORE_PRODUCT_LIMIT; productIndex += 1) {
+      for (const group of categoryProductGroups) {
+        const item = group.items[productIndex];
+        const itemId = item?.id ?? item?.product_id ?? item?.sku ?? item?.product_name;
+        const productId = itemId === undefined || itemId === null ? '' : String(itemId);
+        if (!item || !productId || discoverMoreProductIds.has(productId)) continue;
+
+        discoverMoreProductIds.add(productId);
+        mixedCategoryProducts.push({ ...item, __categoryName: group.categoryName });
+        if (mixedCategoryProducts.length === DISCOVER_MORE_PRODUCT_LIMIT) break;
+      }
+    }
+
+    // Keep browsing useful even while categories are still loading or products
+    // have not yet been assigned to one.
+    for (const item of products) {
+      if (mixedCategoryProducts.length === DISCOVER_MORE_PRODUCT_LIMIT) break;
+      const itemId = item?.id ?? item?.product_id ?? item?.sku ?? item?.product_name;
+      const productId = itemId === undefined || itemId === null ? '' : String(itemId);
+      if (!productId || discoverMoreProductIds.has(productId)) continue;
+
+      discoverMoreProductIds.add(productId);
+      mixedCategoryProducts.push(item);
+    }
 
     const numberFromProduct = (product: any, keys: string[]) => {
       for (const key of keys) {
@@ -2728,13 +3098,14 @@ const renderHomeBody = () => {
       const buyingPrice = numberFromProduct(product, ['buying_price', 'cost_price', 'purchase_price']);
       return sellingPrice - buyingPrice;
     };
-    const activeOrdersFor = (product: any) => numberFromProduct(product, [
+    const salesCountFor = (product: any) => numberFromProduct(product, [
+      'sales_count',
+      'units_sold',
       'active_order_count',
       'current_order_count',
       'orders_in_progress',
       'orders_today',
       'order_count',
-      'sales_count',
     ]);
     const productKey = (product: any) => String(product?.id ?? product?.product_id ?? product?.sku ?? product?.product_name ?? '');
     const takeUnassignedProducts = (candidates: any[], assigned: Set<string>, limit = 4) => {
@@ -2752,16 +3123,15 @@ const renderHomeBody = () => {
     // Keep the curated rails separate: the same item never appears in more than one.
     const assignedHomeProductKeys = new Set<string>();
     const bestSellingProducts = takeUnassignedProducts(
-      [...products].sort((a, b) => profitFor(b) - profitFor(a)),
+      [...products].sort((a, b) => {
+        const salesDifference = salesCountFor(b) - salesCountFor(a);
+        if (salesDifference) return salesDifference;
+        return new Date(b?.updated_at || b?.created_at || 0).getTime() - new Date(a?.updated_at || a?.created_at || 0).getTime();
+      }),
       assignedHomeProductKeys,
     );
     const dealsOfTheDay = takeUnassignedProducts(
-      [...products].sort((a, b) => {
-        const activeOrderDifference = activeOrdersFor(b) - activeOrdersFor(a);
-        if (activeOrderDifference) return activeOrderDifference;
-        const dateFor = (product: any) => new Date(product?.updated_at || product?.created_at || 0).getTime() || 0;
-        return dateFor(b) - dateFor(a);
-      }),
+      [...products].sort((a, b) => profitFor(b) - profitFor(a)),
       assignedHomeProductKeys,
     );
     const freshPicks = takeUnassignedProducts(
@@ -2793,12 +3163,6 @@ const renderHomeBody = () => {
     return (
       <View style={styles.homePageShell}>
         {error ? <View style={styles.errorBox}><Text style={styles.errorText}>{error}</Text></View> : null}
-
-        {cartFeedback ? (
-          <View style={styles.cartFeedbackBar}>
-            <Text style={styles.cartFeedbackText}>{cartFeedback}</Text>
-          </View>
-        ) : null}
 
         <View style={[styles.contentSectionWhite, styles.heroBodyShell]}>
           <View style={styles.heroCardShell}>
@@ -2841,7 +3205,7 @@ const renderHomeBody = () => {
                     <View style={[styles.categoryIconBadge, { backgroundColor: visual.bgColor }]}>
                       <CatalogImage uri={brandImageUrl} style={styles.categoryIconImage} />
                     </View>
-                    <Text style={styles.categoryName}>{brandName}</Text>
+                    <Text style={styles.categoryName} numberOfLines={2}>{brandName}</Text>
                   </TouchableOpacity>
                 );
               })}
@@ -2866,7 +3230,7 @@ const renderHomeBody = () => {
                   <View style={[styles.categoryIconBadge, { backgroundColor: visual.bgColor }]}> 
                     <CatalogImage uri={categoryImageUrl} style={styles.categoryIconImage} />
                   </View>
-                  <Text style={styles.categoryName}>{categoryName}</Text>
+                  <Text style={styles.categoryName} numberOfLines={2}>{categoryName}</Text>
                 </TouchableOpacity>
               );
             })}
@@ -2879,7 +3243,7 @@ const renderHomeBody = () => {
           <ScrollView horizontal nestedScrollEnabled directionalLockEnabled showsHorizontalScrollIndicator={false} style={styles.horizontalList} contentContainerStyle={styles.horizontalListContent}>
             {bestSellingProducts.map((item, index) => {
               const isSaved = wishlist.some((entry: any) => entry.id === item.id);
-              const currentQty = cartQuantities[item.id] || 0;
+              const soldQuantity = salesCountFor(item);
               return (
                 <TouchableOpacity key={getListItemKey(item, index, 'best-seller')} activeOpacity={0.95} style={[styles.productCard, { width: productCardWidth }]} onPress={() => openProductDetail(item)}>
                   <CatalogImage uri={getProductImageUrls(item)[0]} style={styles.productImage} />
@@ -2889,12 +3253,12 @@ const renderHomeBody = () => {
                   <View style={styles.productContent}>
                     <View style={styles.productMetaRow}>
                       <View style={styles.productBadge}>
-                        <Text style={styles.productBadgeText}>Best selling</Text>
+                        <Text style={styles.productBadgeText}>Fast moving</Text>
                       </View>
-                      <Text style={styles.productDeliveryText}>Today</Text>
+                      <Text style={styles.productDeliveryText} numberOfLines={1}>{soldQuantity ? `${soldQuantity} sold` : 'Popular'}</Text>
                     </View>
-                    <Text style={styles.productName}>{item.product_name}</Text>
-                    <Text style={styles.productPrice}>UGX {Number(item.selling_price ?? 0).toLocaleString('en-US')}</Text>
+                    <Text style={styles.productName} numberOfLines={2}>{item.product_name}</Text>
+                    <Text style={styles.productPrice} numberOfLines={1}>UGX {Number(item.selling_price ?? 0).toLocaleString('en-US')}</Text>
                   </View>
                 </TouchableOpacity>
               );
@@ -2909,11 +3273,12 @@ const renderHomeBody = () => {
             {dealsOfTheDay.map((item, index) => {
               const isSaved = wishlist.some((entry: any) => entry.id === item.id);
               return (
-                <TouchableOpacity key={getListItemKey(item, index, 'new-arrival')} activeOpacity={0.95} style={styles.miniProductCard} onPress={() => openProductDetail(item)}>
+                <TouchableOpacity key={getListItemKey(item, index, 'new-arrival')} activeOpacity={0.95} style={[styles.miniProductCard, { width: miniProductCardWidth }]} onPress={() => openProductDetail(item)}>
                   <CatalogImage uri={getProductImageUrls(item)[0]} style={styles.miniProductImage} />
                   <View style={styles.miniProductContent}>
-                    <Text style={styles.miniProductName}>{item.product_name}</Text>
-                    <Text style={styles.miniProductPrice}>UGX {Number(item.selling_price ?? 0).toLocaleString('en-US')}</Text>
+                    <Text style={styles.miniProductTag}>High margin</Text>
+                    <Text style={styles.miniProductName} numberOfLines={2}>{item.product_name}</Text>
+                    <Text style={styles.miniProductPrice} numberOfLines={1}>UGX {Number(item.selling_price ?? 0).toLocaleString('en-US')}</Text>
                   </View>
                 </TouchableOpacity>
               );
@@ -2928,11 +3293,12 @@ const renderHomeBody = () => {
             {freshPicks.map((item, index) => {
               const isSaved = wishlist.some((entry: any) => entry.id === item.id);
               return (
-                <TouchableOpacity key={getListItemKey(item, index, 'fresh-pick')} activeOpacity={0.95} style={styles.miniProductCard} onPress={() => openProductDetail(item)}>
+                <TouchableOpacity key={getListItemKey(item, index, 'fresh-pick')} activeOpacity={0.95} style={[styles.miniProductCard, { width: miniProductCardWidth }]} onPress={() => openProductDetail(item)}>
                   <CatalogImage uri={getProductImageUrls(item)[0]} style={styles.miniProductImage} />
                   <View style={styles.miniProductContent}>
-                    <Text style={styles.miniProductName}>{item.product_name}</Text>
-                    <Text style={styles.miniProductPrice}>UGX {Number(item.selling_price ?? 0).toLocaleString('en-US')}</Text>
+                    <Text style={styles.miniProductTag}>Low margin</Text>
+                    <Text style={styles.miniProductName} numberOfLines={2}>{item.product_name}</Text>
+                    <Text style={styles.miniProductPrice} numberOfLines={1}>UGX {Number(item.selling_price ?? 0).toLocaleString('en-US')}</Text>
                   </View>
                 </TouchableOpacity>
               );
@@ -2944,8 +3310,9 @@ const renderHomeBody = () => {
             <Text style={styles.viewAll}>{mixedCategoryProducts.length} items</Text>
           </View>
           <View style={styles.productGrid}>
-            {mixedCategoryProducts.slice(0, 65).map((item: any, index: number) => {
+            {mixedCategoryProducts.map((item: any, index: number) => {
               const isSaved = wishlist.some((entry: any) => entry.id === item.id);
+              const outOfStock = isProductOutOfStock(item);
               return (
                 <TouchableOpacity key={getListItemKey(item, index, 'home-product')} activeOpacity={0.95} style={styles.productGridCard} onPress={() => openProductDetail(item)}>
                   <CatalogImage uri={getProductImageUrls(item)[0]} style={styles.productGridImage} />
@@ -2955,12 +3322,12 @@ const renderHomeBody = () => {
                   <View style={styles.productGridContent}>
                     <View style={styles.productGridMetaRow}>
                       <View style={styles.productGridBadge}>
-                        <Text style={styles.productGridBadgeText}>{item.__categoryName || 'Featured'}</Text>
+                        <Text style={styles.productGridBadgeText} numberOfLines={1}>{item.__categoryName || 'Featured'}</Text>
                       </View>
-                      <Text style={styles.productGridDeliveryText}>In stock</Text>
+                      <Text style={[styles.productGridDeliveryText, outOfStock && styles.outOfStockText]} numberOfLines={1}>{outOfStock ? 'Out of stock' : 'In stock'}</Text>
                     </View>
-                    <Text style={styles.productGridName}>{item.product_name}</Text>
-                    <Text style={styles.productGridPrice}>UGX {Number(item.selling_price ?? 0).toLocaleString('en-US')}</Text>
+                    <Text style={styles.productGridName} numberOfLines={2}>{item.product_name}</Text>
+                    <Text style={styles.productGridPrice} numberOfLines={1}>UGX {Number(item.selling_price ?? 0).toLocaleString('en-US')}</Text>
                   </View>
                 </TouchableOpacity>
               );
@@ -2977,11 +3344,11 @@ const renderHomeBody = () => {
             </View>
             <ScrollView horizontal nestedScrollEnabled directionalLockEnabled showsHorizontalScrollIndicator={false} style={styles.horizontalList} contentContainerStyle={styles.horizontalListContent}>
               {wishlist.map((item: any, index: number) => (
-                <TouchableOpacity key={getListItemKey(item, index, 'wishlist')} activeOpacity={0.95} style={styles.miniProductCard} onPress={() => openProductDetail(item)}>
+                <TouchableOpacity key={getListItemKey(item, index, 'wishlist')} activeOpacity={0.95} style={[styles.miniProductCard, { width: miniProductCardWidth }]} onPress={() => openProductDetail(item)}>
                   <CatalogImage uri={getProductImageUrls(item)[0]} style={styles.miniProductImage} />
                   <View style={styles.miniProductContent}>
-                    <Text style={styles.miniProductName}>{item.product_name}</Text>
-                    <Text style={styles.miniProductPrice}>UGX {Number(item.selling_price ?? 0).toLocaleString('en-US')}</Text>
+                  <Text style={styles.miniProductName} numberOfLines={2}>{item.product_name}</Text>
+                    <Text style={styles.miniProductPrice} numberOfLines={1}>UGX {Number(item.selling_price ?? 0).toLocaleString('en-US')}</Text>
                   </View>
                 </TouchableOpacity>
               ))}
@@ -3005,6 +3372,7 @@ const renderHomeBody = () => {
   const activeDetailImage = detailGallery[selectedProductImageIndex] || detailGallery[0] || DEFAULT_PRODUCT_IMAGE;
   const isSelectedWishlisted = selectedProduct ? wishlist.some((item: any) => item.id === selectedProduct.id) : false;
   const selectedProductQty = selectedProduct ? (cartQuantities[selectedProduct.id] || 0) : 0;
+  const selectedProductOutOfStock = selectedProduct ? isProductOutOfStock(selectedProduct) : false;
 
   if (loading) {
     return (
@@ -3014,7 +3382,7 @@ const renderHomeBody = () => {
     );
   }
 
-  if (loading) {
+  if (false) {
     return (
       <SafeAreaProvider>
         <SafeAreaView style={styles.loaderScreen}>
@@ -3062,7 +3430,7 @@ const renderHomeBody = () => {
                   onChangeText={setSearchTerm}
                 />
                 <TouchableOpacity style={styles.searchButton} onPress={() => setActiveTab('Categories')}>
-                  <Text style={styles.searchButtonIcon}>⌕</Text>
+                  <Text style={styles.searchButtonIcon}>🔍</Text>
                 </TouchableOpacity>
               </View>
               {renderMainContent()}
@@ -3109,7 +3477,7 @@ const renderHomeBody = () => {
                 <View style={styles.detailHighlightsRow}>
                   <View style={styles.detailHighlightBox}>
                     <Text style={styles.detailHighlightLabel}>Availability</Text>
-                    <Text style={styles.detailHighlightValue}>In stock</Text>
+                    <Text style={[styles.detailHighlightValue, selectedProductOutOfStock && styles.outOfStockText]}>{selectedProductOutOfStock ? 'Out of stock' : 'In stock'}</Text>
                   </View>
                   <View style={styles.detailHighlightBox}>
                     <Text style={styles.detailHighlightLabel}>Delivery</Text>
@@ -3122,7 +3490,8 @@ const renderHomeBody = () => {
                   </TouchableOpacity>
                   <View style={styles.detailPrimaryActions}>
                     <TouchableOpacity
-                      style={styles.primaryActionButton}
+                      disabled={selectedProductOutOfStock}
+                      style={[styles.primaryActionButton, selectedProductOutOfStock && styles.primaryActionButtonDisabled]}
                       onPress={(event: any) => {
                         event?.stopPropagation?.();
                         if (selectedProductQty > 0) {
@@ -3133,9 +3502,9 @@ const renderHomeBody = () => {
                         handleAddToCart(selectedProduct.id, 1, selectedProduct);
                       }}
                     >
-                      <Text style={styles.primaryActionButtonText}>{selectedProductQty > 0 ? 'View cart' : 'Add to cart'}</Text>
+                      <Text style={styles.primaryActionButtonText}>{selectedProductOutOfStock ? 'Out of stock' : selectedProductQty > 0 ? 'View cart' : 'Add to cart'}</Text>
                     </TouchableOpacity>
-                    <View style={styles.detailQuantityControl}>
+                    {!selectedProductOutOfStock ? <View style={styles.detailQuantityControl}>
                       <TouchableOpacity style={styles.quantityButton} onPress={(event: any) => { event?.stopPropagation?.(); adjustProductQuantity(selectedProduct.id, -1, selectedProduct); }}>
                         <Text style={styles.quantityButtonText}>−</Text>
                       </TouchableOpacity>
@@ -3143,23 +3512,11 @@ const renderHomeBody = () => {
                       <TouchableOpacity style={styles.quantityButton} onPress={(event: any) => { event?.stopPropagation?.(); adjustProductQuantity(selectedProduct.id, 1, selectedProduct); }}>
                         <Text style={styles.quantityButtonText}>+</Text>
                       </TouchableOpacity>
-                    </View>
+                    </View> : null}
                   </View>
                 </View>
               </ScrollView>
             </View>
-          </View>
-        ) : null}
-
-        {showCartSummary && !selectedProduct && profileRoute !== 'cart' && profileRoute !== 'checkout' ? (
-          <View style={styles.cartSummaryBar}>
-            <View>
-              <Text style={styles.cartSummaryBarTitle}>{cartCount} item{cartCount > 1 ? 's' : ''} in cart</Text>
-              <Text style={styles.cartSummaryBarSubtitle}>UGX {((cart?.items || []).reduce((sum: number, item: any) => sum + Number(item.quantity || 1) * 25000, 0) + 5000).toLocaleString('en-US')}</Text>
-            </View>
-            <TouchableOpacity style={styles.cartSummaryButton} onPress={() => { setActiveTab('Cart'); setProfileRoute('cart'); }}>
-              <Text style={styles.cartSummaryButtonText}>View cart</Text>
-            </TouchableOpacity>
           </View>
         ) : null}
 
@@ -3257,7 +3614,7 @@ const styles = StyleSheet.create({
   topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 18, paddingBottom: 18, backgroundColor: '#01143F', borderBottomWidth: 0 },
   // Icon button uses subtle translucent white on navy header
   iconButton: { width: 44, height: 44, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.06)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', elevation: 0, shadowColor: '#000', shadowOpacity: 0.02, shadowRadius: 2, shadowOffset: { width: 0, height: 1 } },
-  headerIconText: { fontSize: 20, color: '#FFFFFF' },
+  headerIconText: { fontSize: 24, color: '#FFFFFF' },
   logoBox: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
   logoTextBlock: { flexDirection: 'row', alignItems: 'center', position: 'relative', backgroundColor: 'transparent', paddingHorizontal: 6, paddingVertical: 4, borderRadius: 16 },
   // Slimmer logo container to match reference
@@ -3265,7 +3622,7 @@ const styles = StyleSheet.create({
   logoImage: { width: '100%', height: '100%', resizeMode: 'cover' },
   tagline: { marginTop: 4, color: '#E6EEF6', fontSize: 10, fontWeight: '700', letterSpacing: 1.7, textTransform: 'uppercase' },
   logoBadge: { position: 'absolute', top: -7, right: 12, width: 14, height: 14, borderRadius: 7, backgroundColor: '#2563EB' },
-  badge: { position: 'absolute', top: -2, right: -2, backgroundColor: '#2563EB', borderRadius: 9, minWidth: 18, height: 18, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 4 },
+  badge: { position: 'absolute', top: -4, right: -4, backgroundColor: '#F5821F', borderRadius: 10, minWidth: 20, height: 20, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 4, borderWidth: 2, borderColor: '#01143F' },
   badgeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '700' },
   errorBox: { marginHorizontal: 16, marginBottom: 10, padding: 10, borderRadius: 12, backgroundColor: '#FFF2E6' },
   errorText: { color: '#A25A00', fontSize: 12 },
@@ -3357,8 +3714,8 @@ const styles = StyleSheet.create({
   checkoutNoticeText: { color: '#1B2A4A', fontSize: 13, fontWeight: '700' },
   searchInput: { flex: 1, color: '#111827', fontSize: 14, paddingVertical: 0 },
   // Orange search action to match accent color
-  searchButton: { marginLeft: 8, width: 40, height: 40, borderRadius: 12, backgroundColor: '#F5821F', justifyContent: 'center', alignItems: 'center' },
-  searchButtonIcon: { fontSize: 16, color: '#FFFFFF' },
+  searchButton: { marginLeft: 8, width: 42, height: 42, borderRadius: 21, backgroundColor: '#F5821F', justifyContent: 'center', alignItems: 'center' },
+  searchButtonIcon: { fontSize: 18, color: '#FFFFFF' },
   heroCardShell: { width: '100%', marginHorizontal: 0, marginBottom: 20, borderRadius: 16, backgroundColor: 'transparent', padding: 0, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
   heroBodyShell: { marginHorizontal: -16, borderRadius: 16, backgroundColor: 'transparent', paddingHorizontal: 0, paddingVertical: 0, overflow: 'hidden' },
   heroBodyContent: { paddingHorizontal: 16, paddingTop: 0 },
@@ -3388,36 +3745,38 @@ const styles = StyleSheet.create({
   viewAll: { color: '#2563EB', fontSize: 13, fontWeight: '700' },
   horizontalList: { paddingLeft: 16, paddingRight: 16 },
   horizontalListContent: { paddingRight: 16 },
-  categoryCard: { width: 78, minHeight: 88, backgroundColor: '#FFFFFF', borderRadius: 10, padding: 6, marginRight: 8, alignItems: 'stretch', justifyContent: 'flex-start', shadowColor: '#0F172A', shadowOpacity: 0.04, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 2, borderWidth: 1, borderColor: '#F1F5F9' },
-  categoryIconBadge: { width: '100%', height: 46, borderRadius: 8, justifyContent: 'center', alignItems: 'center', marginBottom: 5, overflow: 'hidden' },
+  categoryCard: { width: 78, height: 102, backgroundColor: '#FFFFFF', borderRadius: 10, padding: 6, marginRight: 8, alignItems: 'stretch', justifyContent: 'flex-start', shadowColor: '#0F172A', shadowOpacity: 0.04, shadowRadius: 5, shadowOffset: { width: 0, height: 2 }, elevation: 2, borderWidth: 1, borderColor: '#F1F5F9' },
+  categoryIconBadge: { width: '100%', height: 54, borderRadius: 8, justifyContent: 'center', alignItems: 'center', marginBottom: 5, overflow: 'hidden', backgroundColor: '#F8FAFC' },
   categoryIconGlyph: { fontSize: 20 },
   categoryIconImage: { width: '100%', height: '100%' },
   sidebarIconImage: { width: 24, height: 24, borderRadius: 6 },
-  categoryName: { fontSize: 10, color: '#0F172A', fontWeight: '700', textAlign: 'center', marginTop: 0, lineHeight: 13, paddingHorizontal: 0, paddingBottom: 0 },
-  productCard: { width: 170, minHeight: 330, backgroundColor: '#FFFFFF', borderRadius: 12, marginRight: 12, overflow: 'hidden', shadowOpacity: 0, elevation: 0, borderWidth: 0, borderColor: 'transparent', position: 'relative' },
-  productImage: { width: '100%', height: 112, backgroundColor: '#FFFFFF' },
-  productContent: { flex: 1, padding: 10 },
+  categoryName: { fontSize: 10, color: '#0F172A', fontWeight: '700', textAlign: 'center', marginTop: 'auto', lineHeight: 13, paddingHorizontal: 0, paddingBottom: 0 },
+  productCard: { width: 170, backgroundColor: '#FFFFFF', borderRadius: 12, marginRight: 12, overflow: 'hidden', shadowOpacity: 0, elevation: 0, borderWidth: 0, borderColor: 'transparent', position: 'relative' },
+  productImage: { width: '100%', aspectRatio: 1.25, backgroundColor: '#F8FAFC' },
+  productContent: { padding: 10 },
   productMetaRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  productBadge: { backgroundColor: '#EFF6FF', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
+  productBadge: { flexShrink: 1, backgroundColor: '#EFF6FF', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
   productBadgeText: { color: '#2563EB', fontSize: 10, fontWeight: '800' },
-  productDeliveryText: { color: '#64748B', fontSize: 10, fontWeight: '700' },
-  productName: { minHeight: 34, fontSize: 13, fontWeight: '800', color: '#0F172A', marginBottom: 4 },
+  productDeliveryText: { marginLeft: 6, flexShrink: 1, color: '#64748B', fontSize: 10, fontWeight: '700', textAlign: 'right' },
+  productName: { minHeight: 34, flexShrink: 1, fontSize: 13, fontWeight: '800', color: '#0F172A', marginBottom: 4 },
   // Make price accent orange like the mock
-  productPrice: { fontSize: 13, fontWeight: '800', color: '#F5821F', marginBottom: 8 },
+  productPrice: { marginTop: 6, flexShrink: 1, fontSize: 13, fontWeight: '800', color: '#F5821F' },
   productActions: { marginTop: 'auto', paddingTop: 14, alignItems: 'center', justifyContent: 'center', width: '100%' },
   cartButton: { marginTop: 'auto', backgroundColor: '#2563EB', borderRadius: 8, paddingVertical: 10, paddingHorizontal: 20, alignItems: 'center', alignSelf: 'center', minWidth: 140 },
   cartButtonText: { color: '#FFFFFF', fontWeight: '800', fontSize: 13 },
   productGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', paddingHorizontal: 0, paddingBottom: 18 },
-  productGridCard: { width: '48%', minHeight: 286, backgroundColor: '#FFFFFF', borderRadius: 12, marginBottom: 12, overflow: 'hidden', shadowOpacity: 0, elevation: 0, borderWidth: 0, borderColor: 'transparent', position: 'relative' },
-  productGridImage: { width: '100%', height: 126, backgroundColor: '#FFFFFF' },
-  productGridContent: { flex: 1, paddingHorizontal: 10, paddingTop: 10, paddingBottom: 12 },
+  productGridCard: { width: '48%', backgroundColor: '#FFFFFF', borderRadius: 12, marginBottom: 12, overflow: 'hidden', shadowOpacity: 0, elevation: 0, borderWidth: 0, borderColor: 'transparent', position: 'relative' },
+  productGridImage: { width: '100%', aspectRatio: 1, backgroundColor: '#F8FAFC' },
+  productGridContent: { paddingHorizontal: 10, paddingTop: 10, paddingBottom: 12 },
   productGridMetaRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
-  productGridBadge: { backgroundColor: '#EFF6FF', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
+  productGridBadge: { flexShrink: 1, backgroundColor: '#EFF6FF', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
   productGridBadgeText: { color: '#2563EB', fontSize: 9, fontWeight: '800' },
-  productGridDeliveryText: { color: '#64748B', fontSize: 10, fontWeight: '700' },
-  productGridName: { minHeight: 34, fontSize: 13, fontWeight: '800', color: '#0F172A', marginBottom: 6 },
-  productGridPrice: { fontSize: 13, fontWeight: '800', color: '#2563EB', marginBottom: 10 },
-  productGridCartButton: { marginTop: 'auto', backgroundColor: '#2563EB', borderRadius: 8, paddingVertical: 10, paddingHorizontal: 16, alignItems: 'center', width: '100%' },
+  productGridDeliveryText: { marginLeft: 6, flexShrink: 1, color: '#64748B', fontSize: 10, fontWeight: '700', textAlign: 'right' },
+  outOfStockText: { color: '#B91C1C' },
+  productGridName: { minHeight: 34, flexShrink: 1, fontSize: 13, fontWeight: '800', color: '#0F172A', marginBottom: 6 },
+  productGridPrice: { marginTop: 6, flexShrink: 1, fontSize: 13, fontWeight: '800', color: '#2563EB' },
+  productGridCartButton: { marginTop: 10, backgroundColor: '#2563EB', borderRadius: 8, paddingVertical: 10, paddingHorizontal: 16, alignItems: 'center', width: '100%' },
+  productGridCartButtonDisabled: { backgroundColor: '#94A3B8' },
   productGridCartButtonText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
   categoryIntroCard: { backgroundColor: '#F8FAFC', borderRadius: 18, padding: 12, marginBottom: 10, borderWidth: 1, borderColor: '#E5E7EB' },
   categoryIntroTextBlock: { flex: 1 },
@@ -3442,11 +3801,12 @@ const styles = StyleSheet.create({
   quantityValue: { minWidth: 24, textAlign: 'center', fontSize: 13, fontWeight: '800', color: '#1B2A4A', marginHorizontal: 8 },
   favoriteButton: { position: 'absolute', top: 10, right: 10, width: 34, height: 34, borderRadius: 17, backgroundColor: 'rgba(255,255,255,0.92)', justifyContent: 'center', alignItems: 'center' },
   favoriteButtonText: { fontSize: 16, color: '#2563EB' },
-  miniProductCard: { width: 140, minHeight: 245, backgroundColor: '#FFFFFF', borderRadius: 12, marginRight: 10, overflow: 'hidden', shadowOpacity: 0, elevation: 0, borderWidth: 0, borderColor: 'transparent' },
-  miniProductImage: { width: '100%', height: 88, backgroundColor: '#FFFFFF' },
-  miniProductContent: { flex: 1, padding: 10 },
-  miniProductName: { minHeight: 34, fontSize: 13, fontWeight: '700', color: '#0F172A' },
-  miniProductPrice: { marginTop: 4, fontSize: 12, fontWeight: '700', color: '#64748B' },
+  miniProductCard: { width: 140, backgroundColor: '#FFFFFF', borderRadius: 12, marginRight: 10, overflow: 'hidden', shadowOpacity: 0, elevation: 0, borderWidth: 0, borderColor: 'transparent' },
+  miniProductImage: { width: '100%', aspectRatio: 1.3, backgroundColor: '#F8FAFC' },
+  miniProductContent: { padding: 10 },
+  miniProductTag: { color: '#2563EB', fontSize: 10, fontWeight: '800' },
+  miniProductName: { minHeight: 34, flexShrink: 1, marginTop: 6, fontSize: 13, fontWeight: '700', color: '#0F172A' },
+  miniProductPrice: { marginTop: 6, flexShrink: 1, fontSize: 12, fontWeight: '700', color: '#64748B' },
   recentlyViewedSection: { marginTop: 18, paddingHorizontal: 16 },
   recentlyViewedTitle: { color: '#0F172A', fontSize: 17, fontWeight: '800', marginBottom: 10 },
   recentlyViewedList: { paddingRight: 4 },
@@ -3488,6 +3848,7 @@ const styles = StyleSheet.create({
   secondaryActionButton: { backgroundColor: '#EFF6FF', borderRadius: 999, paddingVertical: 12, paddingHorizontal: 14, alignItems: 'center', borderWidth: 1, borderColor: '#BFDBFE' },
   secondaryActionButtonText: { color: '#2563EB', fontWeight: '700', fontSize: 13 },
   primaryActionButton: { flex: 1, backgroundColor: '#2563EB', borderRadius: 999, paddingVertical: 12, alignItems: 'center' },
+  primaryActionButtonDisabled: { backgroundColor: '#94A3B8' },
   primaryActionButtonText: { color: '#FFFFFF', fontWeight: '800', fontSize: 13 },
   categoryPage: { flex: 1, backgroundColor: '#F8FAFC' },
   screenHeaderNavy: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 14, backgroundColor: '#01143F', borderBottomWidth: 0 },
@@ -3498,7 +3859,8 @@ const styles = StyleSheet.create({
   headerActionsRow: { flexDirection: 'row', alignItems: 'center' },
   sidebarToggleButton: { marginLeft: 8, width: 40, height: 40, borderRadius: 8, backgroundColor: '#2563EB', justifyContent: 'center', alignItems: 'center' },
   categorySplitView: { flex: 1, flexDirection: 'row' },
-  categorySidebar: { width: 110, backgroundColor: '#FFFFFF', paddingVertical: 8, borderRightWidth: 1, borderRightColor: '#E2E8F0' },
+  categorySidebar: { width: 110, flexGrow: 0, backgroundColor: '#FFFFFF', borderRightWidth: 1, borderRightColor: '#E2E8F0' },
+  categorySidebarContent: { paddingVertical: 8 },
   sidebarRow: { paddingVertical: 10, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', borderLeftWidth: 3, borderLeftColor: 'transparent' },
   sidebarRowActive: { backgroundColor: '#EFF6FF', borderLeftColor: '#2563EB' },
   sidebarIconBadge: { width: 28, height: 28, borderRadius: 8, justifyContent: 'center', alignItems: 'center', marginRight: 8 },
@@ -3572,10 +3934,27 @@ const styles = StyleSheet.create({
   historyContent: { flex: 1 },
   secondaryButton: { marginTop: 10, borderWidth: 1, borderColor: '#F5821F', borderRadius: 999, paddingVertical: 10, alignItems: 'center' },
   secondaryButtonText: { color: '#F5821F', fontWeight: '700', fontSize: 13 },
-  inputField: { borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 10, marginTop: 8, color: '#111827' },
+  inputField: { borderWidth: 1, borderColor: '#DCE5F1', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 13, marginTop: 8, color: '#0F172A', fontSize: 14, backgroundColor: '#F8FAFC' },
+  locationLabel: { color: '#64748B', fontSize: 12, fontWeight: '700', marginTop: 12, marginBottom: 4 },
+  locationSelect: { minHeight: 50, borderWidth: 1, borderColor: '#DCE5F1', borderRadius: 14, paddingHorizontal: 14, backgroundColor: '#F8FAFC', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  locationSelectDisabled: { opacity: 0.5 },
+  locationSelectValue: { color: '#0F172A', fontSize: 14, fontWeight: '600' },
+  locationSelectPlaceholder: { color: '#94A3B8', fontSize: 14 },
+  locationSelectArrow: { color: '#F5821F', fontSize: 20, fontWeight: '800' },
+  locationModalOverlay: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.5)', justifyContent: 'center', padding: 24 },
+  locationModalCard: { maxHeight: '75%', backgroundColor: '#FFFFFF', borderRadius: 20, padding: 18 },
+  locationModalTitle: { color: '#0F172A', fontSize: 18, fontWeight: '800', marginBottom: 10, textTransform: 'capitalize' },
+  locationOptions: { maxHeight: 360 },
+  locationOption: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#EEF2F7' },
+  locationOptionText: { color: '#1B2A4A', fontSize: 15, fontWeight: '600' },
   passwordMessage: { marginTop: 12, color: '#F5821F', fontSize: 13, fontWeight: '700' },
   notificationCard: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#F7F7F9', borderRadius: 16, padding: 12, marginBottom: 12 },
   notificationTextArea: { flex: 1, paddingRight: 12 },
+  notificationList: { gap: 8, marginBottom: 12 },
+  inAppNotification: { borderWidth: 1, borderColor: '#E2E8F0', borderRadius: 14, backgroundColor: '#FFFFFF', padding: 12 },
+  inAppNotificationUnread: { borderColor: '#FDC38B', backgroundColor: '#FFF7ED' },
+  inAppNotificationTitle: { color: '#1B2A4A', fontSize: 14, fontWeight: '800' },
+  inAppNotificationMessage: { color: '#64748B', fontSize: 13, lineHeight: 19, marginTop: 4 },
   statusBadge: { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 999 },
   statusPending: { backgroundColor: '#FFF2E6' },
   statusConfirmed: { backgroundColor: '#EFF6FF' },
@@ -3586,12 +3965,17 @@ const styles = StyleSheet.create({
   detailMeta: { fontSize: 13, color: '#6B7280', marginTop: 6 },
   detailTotal: { fontSize: 20, fontWeight: '800', color: '#1B2A4A', marginTop: 12 },
   profilePage: { flex: 1, backgroundColor: '#F7F7F9', paddingBottom: 24 },
-  profileHeaderBlock: { paddingHorizontal: 18, paddingTop: 20, paddingBottom: 38, backgroundColor: '#01143F', borderBottomLeftRadius: 28, borderBottomRightRadius: 28, minHeight: 220 },
+  profileHeaderBlock: { paddingHorizontal: 18, paddingTop: 20, paddingBottom: 48, backgroundColor: '#01143F', borderBottomLeftRadius: 32, borderBottomRightRadius: 32, minHeight: 252 },
   profileHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   profileHeaderBack: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.12)', justifyContent: 'center', alignItems: 'center' },
   profileHeaderBackText: { color: '#FFFFFF', fontSize: 20, fontWeight: '700' },
   profileHeaderTitle: { color: '#FFFFFF', fontSize: 18, fontWeight: '800' },
-  profileHeaderScreenTitle: { color: '#FFFFFF', fontSize: 24, fontWeight: '800', marginTop: 16 },
+  profileHeaderScreenTitle: { color: '#FFFFFF', fontSize: 26, fontWeight: '800', marginTop: 18, letterSpacing: -0.5 },
+  profileHeaderSubtitle: { color: '#B8C8E5', fontSize: 13, marginTop: 6, lineHeight: 19 },
+  profileAuthLogoRow: { flexDirection: 'row', alignItems: 'center', marginTop: 20 },
+  profileAuthLogo: { width: 38, height: 38, borderRadius: 12, marginRight: 10, backgroundColor: '#FFFFFF' },
+  profileAuthBrand: { color: '#FFFFFF', fontSize: 16, fontWeight: '900', letterSpacing: 2 },
+  profileAuthBrandNote: { color: '#F7B06C', fontSize: 8, marginTop: 2, fontWeight: '800', letterSpacing: 0.4 },
   profileHeaderIcon: { fontSize: 18 },
   profileSettingsButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.12)', justifyContent: 'center', alignItems: 'center' },
   profileIdentityRow: { flexDirection: 'row', alignItems: 'center', marginTop: 16, paddingRight: 8 },
@@ -3664,12 +4048,20 @@ const styles = StyleSheet.create({
   checkoutIntroTitle: { color: '#1B2A4A', fontSize: 14, fontWeight: '800', marginBottom: 4 },
   checkoutIntroText: { color: '#6B7280', fontSize: 12, lineHeight: 18 },
   profileDetailCard: { marginTop: 20, marginHorizontal: 16, backgroundColor: '#FFFFFF', borderRadius: 20, padding: 18, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
-  profileAuthCard: { marginTop: -18, marginHorizontal: 16, backgroundColor: '#FFFFFF', borderRadius: 20, padding: 18, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 3 },
-  profileAuthTitle: { color: '#1B2A4A', fontSize: 19, fontWeight: '800' },
-  profileAuthText: { color: '#64748B', fontSize: 13, lineHeight: 20, marginTop: 6, marginBottom: 8 },
-  profileAuthError: { color: '#C2410C', fontSize: 12, fontWeight: '700', marginTop: 12 },
-  profileAuthPrimaryButton: { marginTop: 16, backgroundColor: '#F5821F', borderRadius: 10, paddingVertical: 13, alignItems: 'center' },
-  profileAuthSecondaryButton: { marginTop: 12, borderWidth: 1, borderColor: '#F5821F', borderRadius: 10, paddingVertical: 12, alignItems: 'center' },
+  profileAuthCard: { marginTop: -26, marginHorizontal: 16, backgroundColor: '#FFFFFF', borderRadius: 24, padding: 20, shadowColor: '#1B2A4A', shadowOpacity: 0.14, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 5 },
+  profileAuthPill: { alignSelf: 'flex-start', backgroundColor: '#FFF1E5', borderRadius: 999, paddingHorizontal: 10, paddingVertical: 5, marginBottom: 10 },
+  profileAuthPillText: { color: '#D8650D', fontSize: 10, fontWeight: '900', letterSpacing: 0.8 },
+  profileAuthTitle: { color: '#0B1F44', fontSize: 22, fontWeight: '900', letterSpacing: -0.4 },
+  profileAuthText: { color: '#64748B', fontSize: 13, lineHeight: 20, marginTop: 7, marginBottom: 10 },
+  profileAuthFieldLabel: { color: '#64748B', fontSize: 10, fontWeight: '900', letterSpacing: 0.8, marginTop: 16 },
+  profileAuthInlineFields: { flexDirection: 'row', gap: 8 },
+  profileAuthHalfField: { flex: 1 },
+  profileAuthHint: { color: '#64748B', fontSize: 11, lineHeight: 16, marginTop: 8 },
+  profileAuthError: { color: '#B42318', fontSize: 12, fontWeight: '700', marginTop: 14, padding: 10, borderRadius: 10, backgroundColor: '#FEF3F2' },
+  profileAuthPrimaryButton: { marginTop: 20, backgroundColor: '#F5821F', borderRadius: 14, paddingVertical: 15, alignItems: 'center', shadowColor: '#F5821F', shadowOpacity: 0.25, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 4 },
+  profileAuthSecondaryButton: { marginTop: 12, borderWidth: 1, borderColor: '#F1B177', borderRadius: 14, paddingVertical: 13, alignItems: 'center', backgroundColor: '#FFFDFC' },
+  forgotPasswordButton: { alignSelf: 'flex-end', paddingVertical: 12, paddingHorizontal: 2 },
+  forgotPasswordText: { color: '#D8650D', fontSize: 13, fontWeight: '800' },
   profileAuthSecondaryText: { color: '#F5821F', fontSize: 13, fontWeight: '800' },
   profileDetailBody: { color: '#4B5563', fontSize: 14, lineHeight: 22, marginBottom: 16 },
   profilePageContent: { paddingBottom: 120 },

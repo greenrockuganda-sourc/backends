@@ -94,10 +94,10 @@ export default function CartScreen({ navigation }) {
   }, []);
 
   const subtotal = useMemo(() => {
-    return items.reduce((sum, item) => sum + Number(item.subtotal || 0), 0);
+    return items.reduce((sum, item) => sum + Number(item.price || 0) * Number(item.quantity || 1), 0);
   }, [items]);
 
-  const deliveryFee = subtotal > 0 ? 10000 : 0;
+  const deliveryFee = 0;
   const discountValue = promoApplied ? Math.min(20000, Math.round(subtotal * 0.1)) : 0;
   const total = subtotal + deliveryFee - discountValue;
 
@@ -246,7 +246,7 @@ export default function CartScreen({ navigation }) {
             </View>
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Delivery Fee</Text>
-              <Text style={styles.summaryValue}>UGX {deliveryFee.toLocaleString('en-US')}</Text>
+              <Text style={styles.summaryValue}>Free</Text>
             </View>
             {promoApplied ? (
               <View style={styles.summaryRow}>

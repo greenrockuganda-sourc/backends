@@ -1,24 +1,27 @@
 {
   "expo": {
-    "name": "Grow",
-    "slug": "grow",
+    "name": "Glow",
+    "slug": "ero-tech",
     "version": "1.0.0",
+    "scheme": "grow",
     "orientation": "portrait",
-    "icon": "./assets/icon.jpg",
+    "icon": "https://res.cloudinary.com/h78tlu47/image/upload/v1784708343/icon_sotujz.jpg",
     "userInterfaceStyle": "light",
-
-    
     "ios": {
-      "supportsTablet": true
-
-      
+      "bundleIdentifier": "com.greenrockuganda.grow",
+      "buildNumber": "1",
+      "supportsTablet": true,
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
     },
     "android": {
+      "package": "com.greenrockuganda.grow",
+      "versionCode": 5,
+      "icon": "https://res.cloudinary.com/h78tlu47/image/upload/v1784708343/icon_sotujz.jpg",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/android-icon-foreground.png",
-        "backgroundImage": "./assets/android-icon-background.png",
-        "monochromeImage": "./assets/android-icon-monochrome.png"
+        "foregroundImage": "https://res.cloudinary.com/h78tlu47/image/upload/v1784708343/icon_sotujz.jpg"
       },
       "predictiveBackGestureEnabled": false
     },
@@ -28,6 +31,12 @@
     "plugins": [
       "expo-asset",
       "expo-status-bar"
-    ]
+    ],
+    "extra": {
+      "apiBaseUrl": "https://backends-production-3d0b.up.railway.app",
+      "eas": {
+        "projectId": "baf95bc3-d2a9-4a8e-b27a-199462f70c34"
+      }
+    }
   }
 }

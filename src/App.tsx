@@ -169,7 +169,7 @@ export default function App() {
       />
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <Header onMenuClick={() => setSidebarOpen(!sidebarOpen)} user={user} onLogout={handleLogout} onProfileClick={() => handleNavigate('settings')} />
+        <Header onMenuClick={() => setSidebarOpen(!sidebarOpen)} user={user} token={accessToken} onLogout={handleLogout} onProfileClick={() => handleNavigate('settings')} />
         <main className="flex-1 overflow-y-auto overflow-x-hidden pb-20 lg:pb-0">
           {loadingProfile && (
             <div className="px-4 py-3 text-sm text-slate-600">Loading your account details...</div>
