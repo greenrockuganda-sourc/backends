@@ -1,25 +1,17 @@
-FROM node:24-alpine AS builder
+FROM python:3.12-slim
 
+ENV PYTHONUNBUFFERED=1
+ENV PORT=8000
 WORKDIR /app
 
-# Install pnpm via Corepack
-RUN corepack enable
-
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
-
-# Install dependencies with project-level allowBuilds config from pnpm-workspace.yaml
-RUN corepack pnpm install --no-frozen-lockfile
+COPY requirements.txt ./
+RUN python -m pip install --upgrade pip && python -m pip install -r requirements.txt
 
 COPY . ./
 
-RUN corepack pnpm build
+RUN chmod +x ./start.sh
+RUN python manage.py collectstatic --noinput
 
-FROM node:24-alpine AS runner
-WORKDIR /app
-
-COPY --from=builder /app/dist ./dist
-COPY server.js ./server.js
-
-EXPOSE 8080
-
-CMD ["node", "server.js"]
+EXPOSE 8000
+# Use a shell entrypoint so environment variables are expanded reliably
+ENTRYPOINT ["sh", "-c", "/app/start.sh"]

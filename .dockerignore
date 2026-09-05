@@ -1,4 +1,13 @@
+.git
+.env
+.venv
 node_modules
-dist
-*.log
-.DS_Store
+frontend-
+DASHBAORD
+mobile
+mobile.worktrees
+build_output.txt
+store_test_output.txt
+*.pyc
+__pycache__
+*.sqlite3

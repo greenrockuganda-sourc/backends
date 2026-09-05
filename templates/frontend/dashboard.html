@@ -1,0 +1,52 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Dashboard</h2>
+<p>Overview of the salon inventory and sales activity.</p>
+<div id="dashboard-summary" class="grid"></div>
+<div id="dashboard-charts" class="grid" style="margin-top: 1rem;"></div>
+<script>
+  const token = localStorage.getItem('accessToken');
+  const summaryBox = document.getElementById('dashboard-summary');
+  const chartsBox = document.getElementById('dashboard-charts');
+  async function loadDashboard() {
+    if (!token) {
+      summaryBox.innerHTML = '<div class="card"><h3>Access required</h3><p>Please log in with an admin account.</p></div>';
+      return;
+    }
+    const response = await fetch('/api/admin/dashboard/', { headers: { Authorization: 'Bearer ' + token } });
+    const result = await response.json();
+    if (!response.ok) {
+      summaryBox.innerHTML = '<div class="card"><h3>Error</h3><p>' + (result.detail || 'Unable to load dashboard') + '</p></div>';
+      return;
+    }
+    const summary = result.summary || {};
+    summaryBox.innerHTML = [
+      ['Total Products', summary.total_products],
+      ['Total Categories', summary.total_categories],
+      ['Total Brands', summary.total_brands],
+      ['Total Customers', summary.total_customers],
+      ['Total Orders', summary.total_orders],
+      ['Orders Today', summary.orders_today],
+      ['Pending Orders', summary.pending_orders],
+      ['Processing Orders', summary.processing_orders],
+      ['Out for Delivery', summary.out_for_delivery],
+      ['Delivered Orders', summary.delivered_orders],
+      ['Cancelled Orders', summary.cancelled_orders],
+      ['Low Stock Products', summary.low_stock_products],
+      ['Out of Stock Products', summary.out_of_stock_products],
+      ['Revenue Today', '$' + Number(summary.revenue_today || 0).toLocaleString()],
+      ['Revenue This Week', '$' + Number(summary.revenue_this_week || 0).toLocaleString()],
+      ['Revenue This Month', '$' + Number(summary.revenue_this_month || 0).toLocaleString()]
+    ].map(([label, value]) => `<div class="card"><h3>${label}</h3><p style="font-size: 1.15rem; font-weight: bold;">${value}</p></div>`).join('');
+
+    const charts = result.charts || {};
+    chartsBox.innerHTML = `
+      <div class="card"><h3>Daily Sales</h3><ul>${(charts.daily_sales || []).map(item => `<li>${item.date}: $${Number(item.revenue || 0).toLocaleString()}</li>`).join('')}</ul></div>
+      <div class="card"><h3>Orders by Status</h3><ul>${(charts.orders_by_status || []).map(item => `<li>${item.status}: ${item.count}</li>`).join('')}</ul></div>
+      <div class="card"><h3>Best Selling Products</h3><ul>${(charts.best_selling_products || []).map(item => `<li>${item.product_name}: ${item.total_quantity}</li>`).join('')}</ul></div>
+      <div class="card"><h3>Top Customers</h3><ul>${(charts.top_customers || []).map(item => `<li>${item.customer}: $${Number(item.total_spend || 0).toLocaleString()}</li>`).join('')}</ul></div>
+    `;
+  }
+  loadDashboard();
+</script>
+{% endblock %}

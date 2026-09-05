@@ -1,0 +1,39 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Inventory Management</h2>
+<table>
+  <thead><tr><th>Product</th><th>Current Stock</th><th>Reorder Level</th><th>Status</th><th>Actions</th></tr></thead>
+  <tbody id="inventory-list"></tbody>
+</table>
+<script>
+  const token = localStorage.getItem('accessToken');
+  const list = document.getElementById('inventory-list');
+  async function loadInventory() {
+    const response = await fetch('/api/admin/inventory/', { headers: { Authorization: 'Bearer ' + token } });
+    const data = await response.json();
+    if (!response.ok) return;
+    list.innerHTML = data.map(item => `
+      <tr>
+        <td>${item.product}</td>
+        <td>${item.current_stock}</td>
+        <td>${item.reorder_level}</td>
+        <td>${item.stock_status}</td>
+        <td class="actions">
+          <button type="button" onclick="updateStock(${item.id}, 1)">Increase</button>
+          <button type="button" onclick="updateStock(${item.id}, -1)">Reduce</button>
+        </td>
+      </tr>
+    `).join('');
+  }
+  window.updateStock = async function(id, change) {
+    const response = await fetch('/api/admin/inventory/' + id + '/', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ change })
+    });
+    const result = await response.json();
+    if (response.ok) { loadInventory(); }
+  };
+  loadInventory();
+</script>
+{% endblock %}

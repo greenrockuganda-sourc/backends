@@ -1,0 +1,39 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Payment Management</h2>
+<table>
+  <thead><tr><th>Customer</th><th>Order</th><th>Amount</th><th>Method</th><th>Status</th><th>Actions</th></tr></thead>
+  <tbody id="payment-list"></tbody>
+</table>
+<script>
+  const token = localStorage.getItem('accessToken');
+  const list = document.getElementById('payment-list');
+  async function loadPayments() {
+    const response = await fetch('/api/admin/payments/', { headers: { Authorization: 'Bearer ' + token } });
+    const data = await response.json();
+    if (!response.ok) return;
+    list.innerHTML = data.map(payment => `
+      <tr>
+        <td>${payment.customer}</td>
+        <td>${payment.order_number}</td>
+        <td>${payment.amount}</td>
+        <td>${payment.payment_method}</td>
+        <td>${payment.payment_status}</td>
+        <td class="actions">
+          <button type="button" onclick="updatePayment(${payment.id}, 'Paid')">Mark paid</button>
+          <button type="button" onclick="updatePayment(${payment.id}, 'Failed')">Mark failed</button>
+        </td>
+      </tr>
+    `).join('');
+  }
+  window.updatePayment = async function(id, status) {
+    const response = await fetch('/api/admin/payments/' + id + '/', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + token },
+      body: JSON.stringify({ payment_status: status })
+    });
+    if (response.ok) loadPayments();
+  };
+  loadPayments();
+</script>
+{% endblock %}

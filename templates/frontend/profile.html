@@ -1,0 +1,48 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>Profile</h2>
+<p>Review and update personal account details.</p>
+<div id="profile-card"></div>
+<form id="profile-form" style="margin-top: 1rem;">
+  <input name="first_name" placeholder="First name">
+  <input name="last_name" placeholder="Last name">
+  <input name="phone_number" placeholder="Phone number">
+  <input name="profile_image" placeholder="Profile image URL">
+  <button type="submit">Update profile</button>
+</form>
+<div id="message"></div>
+<script>
+  const profileCard = document.getElementById('profile-card');
+  const profileForm = document.getElementById('profile-form');
+  const message = document.getElementById('message');
+  const token = localStorage.getItem('accessToken');
+  if (!token) {
+    profileCard.innerHTML = '<p>Please log in first.</p>';
+  } else {
+    fetch('/api/user/profile/', { headers: { Authorization: 'Bearer ' + token } })
+      .then((response) => response.json())
+      .then((result) => {
+        profileCard.innerHTML = '<pre>' + JSON.stringify(result, null, 2) + '</pre>';
+        profileForm.first_name.value = result.first_name || '';
+        profileForm.last_name.value = result.last_name || '';
+        profileForm.phone_number.value = result.phone_number || '';
+        profileForm.profile_image.value = result.profile_image || '';
+      });
+  }
+  profileForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const data = Object.fromEntries(new FormData(profileForm).entries());
+    const response = await fetch('/api/user/profile/', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: 'Bearer ' + token
+      },
+      body: JSON.stringify(data)
+    });
+    const result = await response.json();
+    message.className = 'message ' + (response.ok ? 'success' : 'error');
+    message.textContent = JSON.stringify(result);
+  });
+</script>
+{% endblock %}
