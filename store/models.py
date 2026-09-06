@@ -354,6 +354,20 @@ class Notification(models.Model):
         return self.title
 
 
+class PushToken(models.Model):
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, related_name='push_tokens', null=True, blank=True)
+    token = models.CharField(max_length=255, unique=True)
+    device_info = models.CharField(max_length=255, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'push_tokens'
+
+    def __str__(self):
+        return f"{self.token} ({self.user.email if self.user else 'no-user'})"
+
+
 class Review(models.Model):
     customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='reviews')
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name='reviews')

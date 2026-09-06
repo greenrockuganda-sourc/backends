@@ -206,4 +206,101 @@
     margin: 0;
     padding: 0;
   }
+  /* Hide everything except the receipt preview/container during print */
+  :root, body, body * {
+    visibility: hidden !important;
+  }
+  .receipt-container, .receipt-container * {
+    visibility: visible !important;
+  }
+  .receipt-container {
+    position: absolute !important;
+    left: 0 !important;
+    top: 0 !important;
+    width: 100% !important;
+  }
+
+  /* Page and typographic tweaks for receipts */
+  @page {
+    size: auto;
+    margin: 12mm; /* Comfortable printer margin */
+  }
+
+  .receipt-container {
+    box-sizing: border-box !important;
+    padding: 12mm !important;
+    font-family: Georgia, 'Times New Roman', Times, serif !important;
+    font-size: 12pt !important;
+    color: #000 !important;
+    background: #fff !important;
+  }
+
+  /* Print-only header/footer styling */
+  .print-only {
+    display: none !important;
+  }
+
+  .print-header {
+    display: block !important;
+    position: fixed !important;
+    top: 6mm !important;
+    left: 0 !important;
+    right: 0 !important;
+    text-align: center !important;
+    font-size: 12pt !important;
+    color: #000 !important;
+  }
+
+  .print-footer {
+    display: block !important;
+    position: fixed !important;
+    bottom: 6mm !important;
+    left: 0 !important;
+    right: 0 !important;
+    text-align: center !important;
+    font-size: 10pt !important;
+    color: #000 !important;
+  }
+
+  /* Reserve space so header/footer do not overlap content */
+  .receipt-container {
+    padding-top: 28mm !important;
+    padding-bottom: 18mm !important;
+  }
+
+  /* Page numbering */
+  .page-number:before {
+    content: "Page " counter(page) " of " counter(pages);
+  }
+
+  .receipt-container table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    font-size: 11pt !important;
+  }
+
+  .receipt-container thead {
+    display: table-header-group !important; /* repeat header on each page */
+  }
+
+  .receipt-container tfoot {
+    display: table-footer-group !important; /* repeat footer on each page if present */
+  }
+
+  /* Avoid breaking individual rows across pages */
+  .receipt-container tbody tr {
+    page-break-inside: avoid !important;
+  }
+
+  /* Allow explicit page breaks where needed */
+  .receipt-container .print-break {
+    page-break-after: always !important;
+  }
+
+  /* Ensure images scale and do not overflow */
+  .receipt-container img {
+    max-width: 100% !important;
+    height: auto !important;
+    display: block !important;
+  }
 }

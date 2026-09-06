@@ -43,6 +43,22 @@ interface OrdersProps {
 }
 
 export default function Orders({ token }: OrdersProps) {
+  const sanitizeError = (raw: unknown) => {
+    const text = typeof raw === 'string' ? raw : raw instanceof Error ? raw.message : String(raw)
+    // If server returned an HTML error page, strip tags and show concise message
+    if (/<!doctype html>|<html|<head|<body/i.test(text)) {
+      const stripped = text.replace(/<script[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[\s\S]*?<\/style>/gi, '')
+        .replace(/<[^>]+>/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+      // Prefer meaningful phrases
+      if (/not found/i.test(stripped)) return 'Requested resource not found.'
+      if (/error/i.test(stripped)) return 'Server returned an error.'
+      return stripped || 'Request failed.'
+    }
+    return text || 'Request failed.'
+  }
   const [orders, setOrders] = useState<Order[]>([])
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null)
   const [statusDraft, setStatusDraft] = useState('Pending')
@@ -90,9 +106,9 @@ export default function Orders({ token }: OrdersProps) {
 
         setOrders(normalizedOrders)
       } catch (err) {
-        if (active) {
-          setError(err instanceof Error ? err.message : 'Unable to load orders.')
-        }
+          if (active) {
+            setError(sanitizeError(err instanceof Error ? err.message : err))
+          }
       } finally {
         if (active) {
           setLoading(false)
@@ -258,7 +274,7 @@ export default function Orders({ token }: OrdersProps) {
       })
       setStatusDraft(selectedStatus)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to load order details.')
+      setError(sanitizeError(err instanceof Error ? err.message : err))
     }
   }
 
@@ -282,7 +298,7 @@ export default function Orders({ token }: OrdersProps) {
       }
       notifySuccess(`Order status updated to ${normalizedStatus}`)
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unable to update order status.'
+      const message = sanitizeError(err instanceof Error ? err.message : err)
       setError(message)
       notifyError(message)
     } finally {
@@ -296,11 +312,19 @@ export default function Orders({ token }: OrdersProps) {
     try {
       const receipt = await createReceipt(token, orderId)
       const receiptId = receipt?.id ?? receipt?.receipt_id ?? receipt?.receipt?.id
-      if (!receiptId) {
+      const pdfUrl = receipt?.pdf_url
+
+      let blob: Blob | null = null
+      if (pdfUrl) {
+        const resp = await fetch(pdfUrl, { headers: new Headers({ Authorization: `Bearer ${token}` }) })
+        if (!resp.ok) throw new Error(await resp.text() || 'Failed to download receipt PDF.')
+        blob = await resp.blob()
+      } else if (receiptId) {
+        blob = await downloadReceiptPdf(token, String(receiptId))
+      } else {
         throw new Error('Receipt could not be created for this order.')
       }
 
-      const blob = await downloadReceiptPdf(token, String(receiptId))
       const url = window.URL.createObjectURL(blob)
       const link = document.createElement('a')
       link.href = url
@@ -311,9 +335,9 @@ export default function Orders({ token }: OrdersProps) {
       window.URL.revokeObjectURL(url)
       notifySuccess('Receipt downloaded successfully')
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unable to download receipt.'
-      setError(message)
-      notifyError(message)
+        const message = sanitizeError(err instanceof Error ? err.message : err)
+        setError(message)
+        notifyError(message)
     } finally {
       setIsDownloadingReceipt(false)
     }

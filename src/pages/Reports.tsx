@@ -158,18 +158,10 @@ export default function Reports({ token }: ReportsProps) {
 
   const handleDownloadReport = async (format: 'csv' | 'excel') => {
     try {
-      const url = new URL(`${import.meta.env.VITE_API_BASE_URL ?? ''}/api/admin/reports/${reportType}/`)
-      if (startDate) url.searchParams.set('start_date', startDate)
-      if (endDate) url.searchParams.set('end_date', endDate)
-      url.searchParams.set('format', format)
-      const response = await fetch(url.toString(), {
-        headers: new Headers({ Authorization: `Bearer ${token}` }),
-      })
-      if (!response.ok) {
-        const message = await response.text()
-        throw new Error(message || 'Unable to download report.')
-      }
-      const blob = await response.blob()
+      const params: Record<string, string> = {}
+      if (startDate) params.start_date = startDate
+      if (endDate) params.end_date = endDate
+      const blob = await downloadReport(token, reportType, params, format)
       const extension = format === 'excel' ? 'xlsx' : 'csv'
       const filename = `${reportType}-report.${extension}`
       const tempUrl = window.URL.createObjectURL(blob)

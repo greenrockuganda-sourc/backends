@@ -2,6 +2,7 @@ from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from .models import Brand, Category, Customer, Delivery, Notification, Order, Payment, Product, Receipt, Recipe, Review
+from .models import PushToken
 
 User = get_user_model()
 
@@ -274,3 +275,10 @@ class DeliveryUpdateSerializer(serializers.Serializer):
 
 class NotificationReadSerializer(serializers.Serializer):
     is_read = serializers.BooleanField(required=False)
+
+
+class PushTokenSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PushToken
+        fields = ['token', 'device_info']
+        read_only_fields = []

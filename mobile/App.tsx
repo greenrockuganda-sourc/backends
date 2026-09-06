@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Asset } from 'expo-asset';
 import {
   ActivityIndicator,
   Alert,
@@ -19,10 +20,12 @@ import {
   TouchableOpacity,
   useWindowDimensions,
   View,
+  BackHandler,
   Switch,
   Linking,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
+import * as Notifications from 'expo-notifications';
 import { DEFAULT_PRODUCT_IMAGE, formatCurrency, getOrderImageUrls } from './utils';
 
 const getBackendCandidates = () => {
@@ -73,10 +76,35 @@ const buildUrl = (path: string, baseUrl?: string) => `${baseUrl || API_BASE_URLS
 const CART_STORAGE_KEY = '@glow-cart-v1';
 const AUTH_TOKEN_STORAGE_KEY = '@glow-auth-token-v1';
 const NOTIFICATION_PREFERENCE_STORAGE_KEY = '@glow-notification-preference-v1';
-const DISCOVER_MORE_PRODUCT_LIMIT = 60;
+const DISCOVER_MORE_PRODUCT_LIMIT = 100;
 const CATALOG_IMAGE_FALLBACK = { uri: DEFAULT_PRODUCT_IMAGE };
 const SPLASH_LOGO_URL = 'https://res.cloudinary.com/h78tlu47/image/upload/v1784708343/icon_sotujz.jpg';
 const SPLASH_DELIVERY_IMAGE_URL = 'https://res.cloudinary.com/h78tlu47/image/upload/v1784708354/glow-logo-navy-bg_tzzdwd.jpg';
+const SIDEBAR_PERSIST_KEY = '@glow-show-sidebar-v1';
+const PUSH_TOKEN_STORAGE_KEY = '@glow-expo-push-token-v1';
+
+// Ensure React Native Image defaults to contain so images are shown in full
+try {
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore
+  if (Image) {
+    // @ts-ignore
+    Image.defaultProps = Image.defaultProps || {};
+    // @ts-ignore
+    Image.defaultProps.resizeMode = Image.defaultProps.resizeMode || 'contain';
+  }
+} catch (e) {
+  // ignore
+}
+
+// Configure notification presentation while app is foregrounded
+try {
+  Notifications.setNotificationHandler({
+    handleNotification: async () => ({ shouldShowAlert: true, shouldPlaySound: false, shouldSetBadge: false }),
+  });
+} catch (e) {
+  // if expo-notifications isn't available, ignore
+}
 
 const DELIVERY_LOCATIONS: Record<string, string[]> = {
   Kampala: ['Bugolobi', 'Bukoto', 'Bunga', 'Kawempe', 'Kibuli', 'Kisementi', 'Kololo', 'Makindye', 'Makerere', 'Ntinda', 'Rubaga', 'Muyenga'],
@@ -157,7 +185,7 @@ const CatalogImage = ({ uri, style }: { uri: string; style: any }) => {
     <Image
       source={failedToLoad ? CATALOG_IMAGE_FALLBACK : { uri }}
       style={style}
-      resizeMode="cover"
+      resizeMode="contain"
       onError={() => setFailedToLoad(true)}
     />
   );
@@ -442,6 +470,59 @@ const getProductImageUrls = (product: any): string[] => {
   }
   return [DEFAULT_PRODUCT_IMAGE];
 };
+// Prefetch product image URLs with a concurrency limit. Uses expo-asset when available.
+// Use a module-level fallback cache when called before component initialization.
+const globalPrefetchedImagesCache: Set<string> = new Set();
+
+const prefetchProductImages = async (
+  products: any[],
+  options: { concurrency?: number; totalLimit?: number } = { concurrency: 4, totalLimit: 60 },
+  cacheRef?: { current: Set<string> } | Set<string>
+) => {
+  const concurrency = options.concurrency ?? 4;
+  const totalLimit = options.totalLimit ?? 60;
+  const urls: string[] = [];
+  for (const p of products) {
+    const img = getProductImageUrls(p)[0];
+    if (img && typeof img === 'string') urls.push(img);
+    if (urls.length >= totalLimit) break;
+  }
+
+  const unique = Array.from(new Set(urls)).filter(Boolean);
+  // simple concurrency-controlled worker
+  let i = 0;
+  const workers: Promise<void>[] = [];
+  const cache: Set<string> = cacheRef && (cacheRef as any).current ? (cacheRef as any).current : (cacheRef instanceof Set ? cacheRef : globalPrefetchedImagesCache);
+
+  const runOne = async () => {
+    while (true) {
+      const idx = i++;
+      if (idx >= unique.length) return;
+      const url = unique[idx];
+      if (!url || cache.has(url)) continue;
+      try {
+        // try expo Asset first
+        try {
+          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+          // @ts-ignore
+          await Asset.fromURI(url).downloadAsync();
+        } catch (e) {
+          // fallback to Image.prefetch
+          // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+          // @ts-ignore
+          await Image.prefetch(url);
+        }
+        cache.add(url);
+      } catch (err) {
+        // ignore individual failures
+      }
+    }
+  };
+
+  for (let w = 0; w < concurrency; w++) workers.push(runOne());
+  await Promise.all(workers);
+};
+
 
 const getCategoryIconVisual = (categoryName: string) => {
   const normalized = (categoryName || '').toLowerCase();
@@ -744,6 +825,24 @@ export default function App() {
   const [recoveryPassword, setRecoveryPassword] = useState('');
   const [recoveryPasswordConfirm, setRecoveryPasswordConfirm] = useState('');
   const [postLoginRoute, setPostLoginRoute] = useState<'profile' | 'checkout' | 'orders'>('profile');
+  const prefetchedImagesRef = useRef<Set<string>>(new Set());
+  // Android hardware back button handling: close overlays or navigate to Home
+  useEffect(() => {
+    const onBackPress = () => {
+      if (selectedProduct) {
+        setSelectedProduct(null);
+        return true;
+      }
+      if (activeTab !== 'Home') {
+        setActiveTab('Home');
+        return true;
+      }
+      return false; // let OS handle (exit app)
+    };
+
+    const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => sub.remove();
+  }, [selectedProduct, activeTab]);
   const [cartQuantities, setCartQuantities] = useState<Record<number, number>>({});
   const [cartFeedback, setCartFeedback] = useState<string | null>(null);
   const [cartHydrated, setCartHydrated] = useState(false);
@@ -760,9 +859,13 @@ export default function App() {
   const [newAddressDistrict, setNewAddressDistrict] = useState('');
   const [newAddressVillage, setNewAddressVillage] = useState('');
   const [newAddressPhone, setNewAddressPhone] = useState('');
+  const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
+  const [editingAddressLabel, setEditingAddressLabel] = useState('');
+  const [editingAddressPhone, setEditingAddressPhone] = useState('');
   const [appNotifications, setAppNotifications] = useState<any[]>([]);
   const ordersRequestRef = useRef<string | null>(null);
   const ordersFetchInFlightRef = useRef(false);
+  const cartOpsRef = useRef<Record<string, boolean>>({});
 
   const openAddresses = (target: 'profile' | 'checkout') => {
     setAddressRouteReturnTarget(target);
@@ -770,10 +873,56 @@ export default function App() {
   };
 
   const selectAddress = (address: any) => {
-    setSelectedAddressId(address.id);
+    setSelectedAddressId(String(address.id));
     const addressText = formatDeliveryLocation(address.district || '', address.village || '') || address.address || '';
     setDeliveryAddress(addressText);
     setProfile((prev: any) => (prev ? { ...prev, address: addressText, district: address.district || prev.district, village: address.village || prev.village } : prev));
+  };
+
+  const startEditAddress = (entry: any) => {
+    setEditingAddressId(String(entry.id));
+    setEditingAddressLabel(entry.label || '');
+    setEditingAddressPhone(entry.phone || '');
+  };
+
+  const cancelEditAddress = () => {
+    setEditingAddressId(null);
+    setEditingAddressLabel('');
+    setEditingAddressPhone('');
+  };
+
+  const saveEditedAddress = async (addressId: any) => {
+    const addrId = addressId;
+    // Update locally first
+    setSavedAddresses((prev) => prev.map((a: any) => (String(a.id) === String(addrId) ? { ...a, label: editingAddressLabel || a.label, phone: editingAddressPhone || a.phone } : a)));
+    if (String(selectedAddressId) === String(addrId)) {
+      // If currently selected, update deliveryAddress display
+      setDeliveryAddress((prev) => prev);
+    }
+    // Persist to server
+    if (!authToken) {
+      cancelEditAddress();
+      return;
+    }
+    try {
+      const payload: any = { label: editingAddressLabel || undefined, phone_number: editingAddressPhone || undefined };
+      // Try PATCH to addresses endpoint
+      let res = await requestJson(`/api/addresses/${addrId}/`, { method: 'PATCH', body: JSON.stringify(payload) }, authToken);
+      if (res && res.ok) {
+        await refreshProfile();
+        cancelEditAddress();
+        return;
+      }
+      // Fallback: patch profile if single address model
+      res = await requestJson('/api/profile/', { method: 'PATCH', body: JSON.stringify({ phone_number: editingAddressPhone, address: editingAddressLabel }) }, authToken);
+      if (res && res.ok) {
+        await refreshProfile();
+      }
+    } catch (err) {
+      console.warn('saveEditedAddress error', err);
+    } finally {
+      cancelEditAddress();
+    }
   };
 
   const saveProfileDetails = () => {
@@ -794,6 +943,11 @@ export default function App() {
       return;
     }
 
+    if (savedAddresses.length >= 5) {
+      Alert.alert('Address limit reached', 'You can save up to 5 addresses. Delete an existing address before adding another.');
+      return;
+    }
+
     const addressText = formatDeliveryLocation(newAddressDistrict, newAddressVillage);
 
     const addressEntry = {
@@ -807,14 +961,72 @@ export default function App() {
     };
 
     setSavedAddresses((prev) => [addressEntry, ...prev]);
-    setSelectedAddressId(addressEntry.id);
+    setSelectedAddressId(String(addressEntry.id));
     setDeliveryAddress(addressEntry.address);
     setProfile((prev: any) => (prev ? { ...prev, address: addressEntry.address } : prev));
+    // Persist to server when signed in. Try address collection endpoint first, fallback to profile PATCH
+    (async () => {
+      try {
+        if (!authToken) return;
+        const payload: any = {
+          label: addressEntry.label,
+          address: addressEntry.address,
+          district: addressEntry.district,
+          village: addressEntry.village,
+        };
+        if (addressEntry.phone) payload.phone_number = addressEntry.phone;
+        console.log('[CART] saving new address to server', payload);
+        // Try POST to addresses collection
+        let res = await requestJson('/api/addresses/', { method: 'POST', body: JSON.stringify(payload) }, authToken);
+        if (res && res.ok) {
+          const serverAddr = res.data;
+          // Ensure server address appears in savedAddresses
+          setSavedAddresses((prev) => [serverAddr, ...prev.filter((a: any) => String(a.id) !== String(serverAddr.id))].slice(0, 5));
+          setSelectedAddressId(String(serverAddr.id));
+          await refreshProfile();
+          Alert.alert('Address saved', 'Your new address has been saved to your account and selected for delivery.');
+          return;
+        }
+        // Fallback: update profile with primary address fields
+        res = await requestJson('/api/profile/', { method: 'PATCH', body: JSON.stringify({ address: addressEntry.address, district: addressEntry.district, village: addressEntry.village, phone_number: addressEntry.phone }) }, authToken);
+        console.log('[CART] saveNewAddress fallback response:', res);
+        if (res && res.ok) {
+          await refreshProfile();
+          Alert.alert('Address saved', 'Your new address has been saved to your account and selected for delivery.');
+        }
+      } catch (err) {
+        console.warn('Failed to persist address', err);
+      }
+    })();
     setNewAddressLabel('Home');
     setNewAddressDistrict('');
     setNewAddressVillage('');
     setNewAddressPhone('');
     Alert.alert('Address saved', 'Your new address has been added and selected for delivery.');
+  };
+
+  const deleteAddress = async (addressId: any) => {
+    // Remove locally first for snappy UI
+    setSavedAddresses((prev) => prev.filter((a: any) => String(a.id) !== String(addressId)));
+    if (String(selectedAddressId) === String(addressId)) {
+      setSelectedAddressId(null);
+      setDeliveryAddress('');
+    }
+
+    if (!authToken) return;
+    try {
+      // Try deleting via addresses endpoint
+      const res = await requestJson(`/api/addresses/${addressId}/`, { method: 'DELETE' }, authToken);
+      if (res && (res.ok || res.status === 204)) {
+        await refreshProfile();
+        return;
+      }
+      // Fallback: if API doesn't support delete, try clearing profile fields if they match
+      await requestJson('/api/profile/', { method: 'PATCH', body: JSON.stringify({ address: '', district: '', village: '' }) }, authToken);
+      await refreshProfile();
+    } catch (err) {
+      console.warn('deleteAddress error', err);
+    }
   };
 
     const savePaymentMethod = async () => {
@@ -972,6 +1184,14 @@ export default function App() {
       setCategories(normalizeCategoriesPayload(getCollectionPayload(categoryRes.data, 'categories')));
       setBrands(apiBrands.length ? apiBrands : getBrandsFromProducts(nextProducts));
       setProducts(nextProducts);
+      // Start prefetching product images for faster display
+      (async () => {
+        try {
+          await prefetchProductImages(nextProducts, { concurrency: 4, totalLimit: 120 }, prefetchedImagesRef);
+        } catch (err) {
+          console.warn('[PREFETCH] product image prefetch failed', err);
+        }
+      })();
       const nextCart = cartRes.ok && cartRes.data ? cartRes.data : { items: [] };
       setCart(nextCart);
       setCartQuantities(Object.fromEntries((nextCart.items || []).map((item: any) => [item.product_id ?? item.id, Number(item.quantity || 0)])));
@@ -1092,6 +1312,30 @@ export default function App() {
     restoreAuthToken();
   }, []);
 
+  // Persist and restore sidebar visibility so users can hide and bring it back
+  useEffect(() => {
+    const loadSidebarPref = async () => {
+      try {
+        const raw = await AsyncStorage.getItem(SIDEBAR_PERSIST_KEY);
+        if (raw !== null) setShowSidebar(raw === '1');
+      } catch (err) {
+        // ignore
+      }
+    };
+    void loadSidebarPref();
+  }, []);
+
+  useEffect(() => {
+    const persist = async () => {
+      try {
+        await AsyncStorage.setItem(SIDEBAR_PERSIST_KEY, showSidebar ? '1' : '0');
+      } catch (err) {
+        // ignore
+      }
+    };
+    void persist();
+  }, [showSidebar]);
+
   useEffect(() => {
     if (!cartHydrated) return;
     const persistCart = async () => {
@@ -1148,7 +1392,7 @@ export default function App() {
       }
 
       setSavedAddresses(normalizedAddresses);
-      const currentSelection = normalizedAddresses.find((entry: any) => entry.id === selectedAddressId);
+      const currentSelection = normalizedAddresses.find((entry: any) => String(entry.id) === String(selectedAddressId));
       if (!currentSelection) {
         const defaultAddress = normalizedAddresses.find((entry: any) => entry.isDefault) || normalizedAddresses[0];
         if (defaultAddress) {
@@ -1170,6 +1414,88 @@ export default function App() {
     };
     void loadNotificationPreference();
   }, []);
+
+  // Push notification registration and listeners
+  const [expoPushToken, setExpoPushToken] = useState<string | null>(null);
+  const notificationListenerRef = useRef<any>(null);
+  const responseListenerRef = useRef<any>(null);
+
+  useEffect(() => {
+    if (!notificationEnabled) return undefined;
+
+    const register = async () => {
+      try {
+        const existing = await AsyncStorage.getItem(PUSH_TOKEN_STORAGE_KEY);
+        if (existing) setExpoPushToken(existing);
+
+        const { status: existingStatus } = await Notifications.getPermissionsAsync();
+        let finalStatus = existingStatus;
+        if (existingStatus !== 'granted') {
+          const perm = await Notifications.requestPermissionsAsync();
+          finalStatus = perm.status;
+        }
+        if (finalStatus !== 'granted') {
+          console.log('[PUSH] permission not granted');
+          return;
+        }
+
+        const tokenObj = await Notifications.getExpoPushTokenAsync();
+        const token = (tokenObj as any).data || tokenObj;
+        setExpoPushToken(token);
+        await AsyncStorage.setItem(PUSH_TOKEN_STORAGE_KEY, String(token));
+
+        // send token to backend if available; ignore failures
+        try {
+          await requestJson('/api/notifications/register-token/', { method: 'POST', body: JSON.stringify({ token }) }, authToken);
+        } catch (err) {
+          console.warn('[PUSH] register token send failed', err);
+        }
+
+        if (Platform.OS === 'android') {
+          try {
+            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+            // @ts-ignore
+            await Notifications.setNotificationChannelAsync('default', { name: 'default', importance: Notifications.AndroidImportance.MAX, enableVibrate: true, sound: 'default' });
+          } catch (e) {
+            // ignore channel setup failure
+          }
+        }
+      } catch (e) {
+        console.warn('[PUSH] registration error', e);
+      }
+    };
+
+    void register();
+
+    notificationListenerRef.current = Notifications.addNotificationReceivedListener((notification) => {
+      try {
+        const title = notification.request.content.title || 'Notification';
+        const body = notification.request.content.body || '';
+        Alert.alert(title, body);
+        setAppNotifications((prev) => [notification.request.content, ...(prev || [])].slice(0, 50));
+      } catch (e) {
+        // ignore
+      }
+    });
+
+    responseListenerRef.current = Notifications.addNotificationResponseReceivedListener((response) => {
+      try {
+        // handle user tapping the notification: navigate to Orders
+        setActiveTab('Orders');
+      } catch (e) {
+        // ignore
+      }
+    });
+
+    return () => {
+      try {
+        if (notificationListenerRef.current) Notifications.removeNotificationSubscription(notificationListenerRef.current);
+        if (responseListenerRef.current) Notifications.removeNotificationSubscription(responseListenerRef.current);
+      } catch (e) {
+        // ignore
+      }
+    };
+  }, [authToken, notificationEnabled]);
 
   useEffect(() => {
     if (!notificationPreferenceHydrated) return;
@@ -1309,7 +1635,7 @@ export default function App() {
       setCheckoutNotice({ type: 'error', message: 'Sign in to retry placing the order.' });
       return;
     }
-    const selectedAddress = savedAddresses.find((entry: any) => entry.id === selectedAddressId);
+    const selectedAddress = savedAddresses.find((entry: any) => String(entry.id) === String(selectedAddressId));
     if (!selectedAddress?.district || !selectedAddress?.village) {
       setCheckoutNotice({ type: 'error', message: 'Choose a district and village or area before retrying your order.' });
       return;
@@ -1363,14 +1689,41 @@ export default function App() {
       const filtered = prev.filter((item) => item.id !== product.id);
       return [product, ...filtered].slice(0, 6);
     });
+    // Prefetch detail gallery images for faster viewing
+    (async () => {
+      try {
+        const urls = getProductImageUrls(product).slice(0, 6);
+        for (const url of urls) {
+          if (!url) continue;
+          if (prefetchedImagesRef.current.has(url)) continue;
+          try {
+            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+            // @ts-ignore
+            await Asset.fromURI(url).downloadAsync();
+            prefetchedImagesRef.current.add(url);
+          } catch (e) {
+            // fallback
+            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+            // @ts-ignore
+            await Image.prefetch(url);
+            prefetchedImagesRef.current.add(url);
+          }
+        }
+      } catch (err) {
+        // ignore
+      }
+    })();
   };
 
   const syncCartWithQuantity = (productId: number, nextQty: number, product?: any) => {
     setCart((prev: any) => {
       const items = Array.isArray(prev?.items) ? prev.items : [];
-      const existing = items.find((item: any) => item.product_id === productId);
+      const existing = items.find((item: any) => Number(item.product_id ?? item.id) === Number(productId));
+      let nextCart;
       if (nextQty <= 0) {
-        return { ...prev, items: items.filter((item: any) => item.product_id !== productId) };
+        nextCart = { ...prev, items: items.filter((item: any) => Number(item.product_id ?? item.id) !== Number(productId)) };
+        console.log('[CART] sync remove ->', productId, 'nextCart items:', nextCart.items.map((i: any) => Number(i.product_id ?? i.id)));
+        return nextCart;
       }
       const cartItem = {
         product_id: productId,
@@ -1381,9 +1734,13 @@ export default function App() {
         category_name: product?.category_name || existing?.category_name || null,
       };
       if (existing) {
-        return { ...prev, items: items.map((item: any) => item.product_id === productId ? { ...item, ...cartItem } : item) };
+        nextCart = { ...prev, items: items.map((item: any) => Number(item.product_id ?? item.id) === Number(productId) ? { ...item, ...cartItem } : item) };
+        console.log('[CART] sync update ->', productId, 'qty:', nextQty);
+        return nextCart;
       }
-      return { ...prev, items: [...items, cartItem] };
+      nextCart = { ...prev, items: [...items, cartItem] };
+      console.log('[CART] sync add ->', productId, 'qty:', nextQty);
+      return nextCart;
     });
   };
 
@@ -1395,8 +1752,52 @@ export default function App() {
 
   const refreshServerCart = async (token: string) => {
     const response = await requestJson('/api/cart/', {}, token);
+    console.log('[CART] refreshServerCart response:', response);
     if (response.ok) applyServerCart(response.data);
     return response;
+  };
+
+  const refreshProfile = async () => {
+    if (!authToken) return null;
+    try {
+      const res = await requestJson('/api/profile/', {}, authToken);
+      console.log('[API] refreshProfile response:', res);
+      if (res.ok) {
+        setProfile(res.data);
+        setProfilePhoto(res.data?.profile_image || null);
+        // Populate savedAddresses if backend provides them, or derive a primary address from profile
+        const serverAddresses = res.data?.addresses || res.data?.saved_addresses || res.data?.address_list || null;
+        if (Array.isArray(serverAddresses) && serverAddresses.length) {
+          setSavedAddresses(serverAddresses.map((a: any) => ({
+            id: a.id ?? a.address_id ?? a.pk ?? a._id ?? a.label ?? `${a.district}-${a.village}`,
+            label: a.label || a.name || 'Address',
+            address: a.address || formatDeliveryLocation(a.district || '', a.village || ''),
+            district: a.district || a.region || '',
+            village: a.village || a.village_name || a.area || '',
+            phone: a.phone_number || a.phone || '',
+          })));
+        } else if (res.data?.district || res.data?.village || res.data?.address) {
+          const primary = {
+            id: res.data?.id ? `profile-${res.data.id}` : `profile-${Date.now()}`,
+            label: 'Primary',
+            address: res.data?.address || formatDeliveryLocation(res.data?.district || '', res.data?.village || ''),
+            district: res.data?.district || '',
+            village: res.data?.village || '',
+            phone: res.data?.phone_number || '',
+          };
+          setSavedAddresses([primary]);
+        }
+        return res.data;
+      }
+      if (res.status === 401 || res.status === 403) {
+        setAuthToken(null);
+        try { await AsyncStorage.removeItem(AUTH_TOKEN_STORAGE_KEY); } catch (err) { console.warn('[AUTH] remove token failed', err); }
+      }
+      return null;
+    } catch (err) {
+      console.warn('[API] refreshProfile failed', err);
+      return null;
+    }
   };
 
   const handleAddToCart = async (productId: number, quantity: number = 1, product?: any) => {
@@ -1457,12 +1858,90 @@ export default function App() {
           await refreshServerCart(authToken);
           return;
         }
-        const response = await requestJson('/api/cart/update/', { method: 'PATCH', body: JSON.stringify({ cart_item_id: cartItem.id, quantity: nextQty }) }, authToken);
-        if (response.ok) applyServerCart(response.data);
-        else setError(getApiErrorMessage(response.data, 'Unable to update cart quantity.'));
+        const opId = String(cartItem.id);
+        if (cartOpsRef.current[opId]) {
+          console.log('[CART] update skipped, op already in-flight for', opId);
+          return;
+        }
+        cartOpsRef.current[opId] = true;
+        try {
+          const response = await requestJson('/api/cart/update/', { method: 'PATCH', body: JSON.stringify({ cart_item_id: cartItem.id, quantity: nextQty }) }, authToken);
+          if (response.ok) applyServerCart(response.data);
+          else setError(getApiErrorMessage(response.data, 'Unable to update cart quantity.'));
+        } finally {
+          delete cartOpsRef.current[opId];
+        }
       }
       await refreshServerCart(authToken);
     } catch {
+      setError('Unable to sync cart to server right now.');
+    }
+  };
+
+  const removeFromCart = async (productId: number, product?: any) => {
+    console.log('[CART] removeFromCart called for', productId);
+    // Optimistically remove locally
+    setCartQuantities((prev) => {
+      const updated = { ...prev };
+      delete updated[productId];
+      return updated;
+    });
+    syncCartWithQuantity(productId, 0, product);
+    console.log('[CART] local cart after remove:', cart);
+
+    if (!authToken) return;
+    try {
+      const cartItem = (cart?.items || []).find((item: any) => Number(item.product_id ?? item.id) === Number(productId));
+      console.log('[CART] server sync attempt for cartItem:', cartItem);
+      if (!cartItem?.id) {
+        // If we don't have a cart_item id, just refresh from server and return
+        await refreshServerCart(authToken);
+        return;
+      }
+      const opId = String(cartItem.id);
+      if (cartOpsRef.current[opId]) {
+        console.log('[CART] remove skipped, op already in-flight for', opId);
+        return;
+      }
+      cartOpsRef.current[opId] = true;
+      // Try update to zero quantity first
+      try {
+        const response = await requestJson('/api/cart/update/', { method: 'PATCH', body: JSON.stringify({ cart_item_id: cartItem.id, quantity: 0 }) }, authToken);
+        console.log('[CART] update->0 response:', response);
+        if (response.ok) {
+          console.log('[CART] server update->0 ok, applying server cart');
+          applyServerCart(response.data);
+          // Ensure server truly removed it; refresh and check
+          const after = await refreshServerCart(authToken);
+          const stillPresent = (after.data?.items || []).some((it: any) => Number(it.product_id ?? it.id) === Number(productId));
+          if (stillPresent) {
+            console.log('[CART] item still present after update->0, attempting DELETE fallback for cart_item id', cartItem.id);
+            const del = await requestJson(`/api/cart/remove/${cartItem.id}/`, { method: 'DELETE' }, authToken);
+            console.log('[CART] DELETE fallback response:', del);
+            if (del.ok) {
+              console.log('[CART] DELETE fallback ok, refreshing cart');
+              await refreshServerCart(authToken);
+            } else {
+              console.warn('[CART] DELETE fallback failed', del);
+            }
+          }
+        } else {
+          console.warn('[CART] server update->0 failed', response);
+          // Try explicit remove endpoint as fallback
+          const del = await requestJson(`/api/cart/remove/${cartItem.id}/`, { method: 'DELETE' }, authToken);
+          console.log('[CART] DELETE fallback response:', del);
+          if (del.ok) {
+            console.log('[CART] DELETE fallback ok, applying server cart');
+            await refreshServerCart(authToken);
+          } else {
+            setError(getApiErrorMessage(response.data, 'Unable to remove item from cart.'));
+            await refreshServerCart(authToken);
+          }
+        }
+      } finally {
+        delete cartOpsRef.current[opId];
+      }
+    } catch (err) {
       setError('Unable to sync cart to server right now.');
     }
   };
@@ -1521,6 +2000,30 @@ export default function App() {
       return false;
     }
     return true;
+  };
+
+  // Prompt user to sign in or continue as guest before confirming checkout.
+  const confirmCheckoutAuth = async (): Promise<boolean> => {
+    if (isAuthenticated) return true;
+    return new Promise((resolve) => {
+      Alert.alert(
+        'Continue as guest?',
+        'You can sign in to complete checkout now, or continue as a guest and confirm locally.',
+        [
+          { text: 'Sign in', onPress: () => {
+            setProfileAuthMode('login');
+            setProfileAuthError(null);
+            setPostLoginRoute('checkout');
+            setActiveTab('Profile');
+            setProfileRoute('login');
+            resolve(false);
+          } },
+          { text: 'Continue as guest', onPress: () => resolve(true), style: 'default' },
+          { text: 'Cancel', onPress: () => resolve(false), style: 'cancel' },
+        ],
+        { cancelable: true },
+      );
+    });
   };
 
   const requireAuthenticatedOrders = () => {
@@ -1729,6 +2232,9 @@ export default function App() {
             <Text style={styles.headerBackArrow}>{'<'}</Text>
           </TouchableOpacity>
           <Text style={[styles.headerTitle, { fontSize: 20, fontWeight: '800' }]}>{isBrandMode ? 'Brands' : 'Categories'}</Text>
+          <TouchableOpacity style={[styles.sidebarToggleButton, { marginRight: 8 }]} onPress={() => setShowSidebar((s) => !s)} accessibilityRole="button">
+            <Text style={styles.sidebarToggleText}>{showSidebar ? 'Hide' : 'Show'}</Text>
+          </TouchableOpacity>
           <TouchableOpacity style={[styles.headerIconButton, { backgroundColor: 'transparent', borderWidth: 0, width: 36, height: 36 }]} onPress={openCartScreen}>
             <Text style={styles.headerIconText}>🛒</Text>
             {cartCount > 0 ? <View style={styles.badge}><Text style={styles.badgeText}>{cartCount}</Text></View> : null}
@@ -1793,58 +2299,83 @@ export default function App() {
               })}
             </View>
 
-            <ScrollView contentContainerStyle={styles.gridContent} showsVerticalScrollIndicator={false}>
-              {sortedCategoryProducts.length ? (
-                <>
-                  <View style={styles.featuredStrip}>
-                    <View style={styles.featuredStripContent}>
-                      <Text style={styles.featuredStripTitle}>Spotlight picks</Text>
-                      <Text style={styles.featuredStripText}>A refined selection designed to feel effortless to browse.</Text>
-                    </View>
-                    <View style={styles.featuredStripPills}>
-                      {featuredProducts.map((item: any, index: number) => (
-                        <View key={getListItemKey(item, index, 'featured-product')} style={styles.featuredStripPill}>
-                          <Text style={styles.featuredStripPillText}>{item.product_name}</Text>
-                        </View>
-                      ))}
-                    </View>
-                  </View>
-
-                  <View style={styles.productGrid}>
-                    {sortedCategoryProducts.map((item: any, index: number) => {
-                      const isSaved = wishlist.some((entry: any) => entry.id === item.id);
-                      const outOfStock = isProductOutOfStock(item);
-                      return (
-                        <TouchableOpacity key={getListItemKey(item, index, 'category-product')} style={styles.productGridCard} onPress={() => openProductDetail(item)}>
-                          <CatalogImage uri={getProductImageUrls(item)[0]} style={styles.productGridImage} />
-                          <TouchableOpacity style={styles.favoriteButton} onPress={() => toggleWishlist(item)}>
-                            <Text style={styles.favoriteButtonText}>{isSaved ? '♥' : '♡'}</Text>
-                          </TouchableOpacity>
-                          <View style={styles.productGridContent}>
-                            <View style={styles.productGridMetaRow}>
-                              <View style={styles.productGridBadge}>
-                                <Text style={styles.productGridBadgeText} numberOfLines={1}>{selectedLabel}</Text>
-                              </View>
-                              <Text style={[styles.productGridDeliveryText, outOfStock && styles.outOfStockText]} numberOfLines={1}>{outOfStock ? 'Out of stock' : 'In stock'}</Text>
-                            </View>
-                            <Text style={styles.productGridName} numberOfLines={2}>{item.product_name}</Text>
-                            <Text style={styles.productGridPrice} numberOfLines={1}>UGX {Number(item.selling_price ?? 0).toLocaleString('en-US')}</Text>
-                            <TouchableOpacity disabled={outOfStock} style={[styles.productGridCartButton, outOfStock && styles.productGridCartButtonDisabled]} onPress={(event: any) => { event?.stopPropagation?.(); handleAddToCart(item.id, 1, item); }}>
-                              <Text style={styles.productGridCartButtonText}>{outOfStock ? 'Out of stock' : 'Add to cart'}</Text>
-                            </TouchableOpacity>
+            {selectedLabel === allLabel ? (
+              <ScrollView contentContainerStyle={styles.productGrid} showsVerticalScrollIndicator={false}>
+                {catalogItems.map((item: any, index: number) => {
+                  const title = item.category_name || item.brand_name || item.name;
+                  const imageUrl = getCategoryImageUrl(item, getCategoryIconVisual(title).imageUrl);
+                  return (
+                    <TouchableOpacity key={getListItemKey(item, index, 'catalog-item')} style={styles.productGridCard} onPress={() => {
+                      if (isBrandMode) {
+                        setSelectedBrand(title);
+                        setSelectedBrandId(String(item.id ?? item.brand_id ?? item.category_id ?? title));
+                      } else {
+                        setSelectedCategory(title);
+                        setSelectedCategoryId(String(item.id ?? item.category_id ?? item.brand_id ?? title));
+                      }
+                    }}>
+                      <CatalogImage uri={imageUrl} style={styles.productGridImage} />
+                      <View style={styles.productGridContent}>
+                        <Text style={styles.productGridName} numberOfLines={2}>{title}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            ) : (
+              <ScrollView contentContainerStyle={styles.gridContent} showsVerticalScrollIndicator={false}>
+                {sortedCategoryProducts.length ? (
+                  <>
+                    <View style={styles.featuredStrip}>
+                      <View style={styles.featuredStripContent}>
+                        <Text style={styles.featuredStripTitle}>Spotlight picks</Text>
+                        <Text style={styles.featuredStripText}>A refined selection designed to feel effortless to browse.</Text>
+                      </View>
+                      <View style={styles.featuredStripPills}>
+                        {featuredProducts.map((item: any, index: number) => (
+                          <View key={getListItemKey(item, index, 'featured-product')} style={styles.featuredStripPill}>
+                            <Text style={styles.featuredStripPillText}>{item.product_name}</Text>
                           </View>
-                        </TouchableOpacity>
-                      );
-                    })}
+                        ))}
+                      </View>
+                    </View>
+
+                    <View style={styles.productGrid}>
+                      {sortedCategoryProducts.map((item: any, index: number) => {
+                        const isSaved = wishlist.some((entry: any) => entry.id === item.id);
+                        const outOfStock = isProductOutOfStock(item);
+                        return (
+                          <TouchableOpacity key={getListItemKey(item, index, 'category-product')} style={styles.productGridCard} onPress={() => openProductDetail(item)}>
+                            <CatalogImage uri={getProductImageUrls(item)[0]} style={styles.productGridImage} />
+                            <TouchableOpacity style={styles.favoriteButton} onPress={() => toggleWishlist(item)}>
+                              <Text style={styles.favoriteButtonText}>{isSaved ? '♥' : '♡'}</Text>
+                            </TouchableOpacity>
+                            <View style={styles.productGridContent}>
+                              <View style={styles.productGridMetaRow}>
+                                <View style={styles.productGridBadge}>
+                                  <Text style={styles.productGridBadgeText} numberOfLines={1}>{selectedLabel}</Text>
+                                </View>
+                                <Text style={[styles.productGridDeliveryText, outOfStock && styles.outOfStockText]} numberOfLines={1}>{outOfStock ? 'Out of stock' : 'In stock'}</Text>
+                              </View>
+                              <Text style={styles.productGridName} numberOfLines={2}>{item.product_name}</Text>
+                              <Text style={styles.productGridPrice} numberOfLines={1}>UGX {Number(item.selling_price ?? 0).toLocaleString('en-US')}</Text>
+                              <TouchableOpacity disabled={outOfStock} style={[styles.productGridCartButton, outOfStock && styles.productGridCartButtonDisabled]} onPress={(event: any) => { event?.stopPropagation?.(); handleAddToCart(item.id, 1, item); }}>
+                                <Text style={styles.productGridCartButtonText}>{outOfStock ? 'Out of stock' : 'Add to cart'}</Text>
+                              </TouchableOpacity>
+                            </View>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </>
+                ) : (
+                  <View style={styles.emptyStateCard}>
+                    <Text style={styles.emptyStateTitle}>No products found</Text>
+                    <Text style={styles.emptyStateText}>Try another category or search term.</Text>
                   </View>
-                </>
-              ) : (
-                <View style={styles.emptyStateCard}>
-                  <Text style={styles.emptyStateTitle}>No products found</Text>
-                  <Text style={styles.emptyStateText}>Try another category or search term.</Text>
-                </View>
-              )}
-            </ScrollView>
+                )}
+              </ScrollView>
+            )}
           </View>
         </View>
       </View>
@@ -2062,7 +2593,7 @@ export default function App() {
               <View style={styles.profileHeaderBack} />
             </View>
             <View style={styles.profileAuthLogoRow}>
-              <Image source={{ uri: SPLASH_LOGO_URL }} style={styles.profileAuthLogo} resizeMode="cover" />
+              <Image source={{ uri: SPLASH_LOGO_URL }} style={styles.profileAuthLogo} resizeMode="contain" />
               <View>
                 <Text style={styles.profileAuthBrand}>GLOW</Text>
                 <Text style={styles.profileAuthBrandNote}>SALON SUPPLIES, DELIVERED.</Text>
@@ -2174,8 +2705,8 @@ export default function App() {
 
     if (profileRoute === 'favorites') {
       return (
-        <View style={styles.profilePage}>
-          <View style={styles.profileHeaderBlock}>
+          <View style={styles.profilePage}>
+            <View style={styles.profileHeaderBlock}>
             <View style={styles.profileHeaderRow}>
               <View style={styles.profileHeaderBack} />
               <Text style={styles.profileHeaderTitle}>Favorites</Text>
@@ -2243,6 +2774,9 @@ export default function App() {
                           <Text style={styles.stepperButtonText}>+</Text>
                         </TouchableOpacity>
                       </View>
+                      <TouchableOpacity style={styles.secondaryButton} onPress={(event: any) => { event?.stopPropagation?.(); removeFromCart(item.product_id ?? item.id, item); }}>
+                        <Text style={styles.secondaryButtonText}>Remove</Text>
+                      </TouchableOpacity>
                     </View>
                   ))}
                 </View>
@@ -2389,12 +2923,14 @@ export default function App() {
                 </View>
               </View>
               <TouchableOpacity style={styles.checkoutConfirmButton} onPress={async () => {
-                if (!requireAuthenticatedCheckout()) return;
+                const proceedAuth = await confirmCheckoutAuth();
+                if (!proceedAuth) return;
 
                 const normalizedItems = (cart?.items || []).filter((item: any) => Number(item.quantity || 1) > 0);
                 const hasValidQuantity = normalizedItems.every((item: any) => Number(item.quantity || 1) >= 1);
-                const selectedAddress = savedAddresses.find((entry: any) => entry.id === selectedAddressId);
+                const selectedAddress = savedAddresses.find((entry: any) => String(entry.id) === String(selectedAddressId));
                 const trimmedAddress = formatDeliveryLocation(selectedAddress?.district || '', selectedAddress?.village || '');
+                console.log('[CHECKOUT] selectedAddressId:', selectedAddressId, 'selectedAddress:', selectedAddress, 'savedAddresses:', savedAddresses);
                 const trimmedPayment = paymentMethod.trim();
 
                 if (!normalizedItems.length) {
@@ -2445,34 +2981,42 @@ export default function App() {
                 // Optimistically show the order locally while we attempt to create it on the server
                 setOrders((prev) => [...prev, newOrder]);
 
-                try {
-                  const payload = {
-                    district: selectedAddress.district,
-                    village: selectedAddress.village,
-                    phone_number: profile?.phone_number || '',
-                    payment_method: mapPaymentMethodToApiValue(trimmedPayment),
-                    notes: '',
-                  };
+                if (authToken) {
+                  try {
+                    const payload = {
+                      district: selectedAddress.district,
+                      village: selectedAddress.village,
+                      phone_number: profile?.phone_number || '',
+                      payment_method: mapPaymentMethodToApiValue(trimmedPayment),
+                      notes: '',
+                    };
 
-                  const res = await requestJson('/api/orders/create/', { method: 'POST', body: JSON.stringify(payload) }, authToken);
+                    const res = await requestJson('/api/orders/create/', { method: 'POST', body: JSON.stringify(payload) }, authToken);
 
-                  if (res && (res.status === 201 || res.ok)) {
-                    const serverOrder = res.data?.order || res.data;
-                    // Replace the optimistic local order with the server-provided order
-                    setOrders((prev) => (prev || []).map((o: any) => (o && o._local && o.order_number === newOrder.order_number) ? serverOrder : o));
-                    setCart({ items: [] });
-                    setCartFeedback('Order confirmed');
-                    setCheckoutNotice({ type: 'success', message: `Order ${serverOrder.order_number} placed.` });
-                    setProfileRoute('order_success');
-                  } else {
-                    // Mark the local order as errored so the user can retry
+                    if (res && (res.status === 201 || res.ok)) {
+                      const serverOrder = res.data?.order || res.data;
+                      // Replace the optimistic local order with the server-provided order
+                      setOrders((prev) => (prev || []).map((o: any) => (o && o._local && o.order_number === newOrder.order_number) ? serverOrder : o));
+                      setCart({ items: [] });
+                      setCartFeedback('Order confirmed');
+                      setCheckoutNotice({ type: 'success', message: `Order ${serverOrder.order_number} placed.` });
+                      setProfileRoute('order_success');
+                    } else {
+                      // Mark the local order as errored so the user can retry
+                      setOrders((prev) => (prev || []).map((o: any) => (o && o._local && o.order_number === newOrder.order_number) ? { ...o, _error: true } : o));
+                      setCheckoutNotice({ type: 'error', message: res?.data?.detail || 'Unable to place order. Please try again.' });
+                    }
+                  } catch (err) {
+                    console.error('create order error', err);
                     setOrders((prev) => (prev || []).map((o: any) => (o && o._local && o.order_number === newOrder.order_number) ? { ...o, _error: true } : o));
-                    setCheckoutNotice({ type: 'error', message: res?.data?.detail || 'Unable to place order. Please try again.' });
+                    setCheckoutNotice({ type: 'error', message: 'Network error placing order. Please try again.' });
                   }
-                } catch (err) {
-                  console.error('create order error', err);
-                  setOrders((prev) => (prev || []).map((o: any) => (o && o._local && o.order_number === newOrder.order_number) ? { ...o, _error: true } : o));
-                  setCheckoutNotice({ type: 'error', message: 'Network error placing order. Please try again.' });
+                } else {
+                  // Guest flow: persist locally and show success screen
+                  setCart({ items: [] });
+                  setCartFeedback('Order saved locally');
+                  setCheckoutNotice({ type: 'success', message: `Order ${newOrder.order_number} created locally. Sign in to submit to the seller.` });
+                  setProfileRoute('order_success');
                 }
               }}>
                 <Text style={styles.primaryButtonText}>Confirm order · UGX {total.toLocaleString('en-US')}</Text>
@@ -2494,19 +3038,52 @@ export default function App() {
             </View>
             <Text style={styles.profileHeaderScreenTitle}>Choose where your orders should go</Text>
           </View>
-          <View style={styles.profileDetailCard}>
+          <ScrollView contentContainerStyle={styles.profileDetailCard} showsVerticalScrollIndicator={false}>
             <Text style={styles.infoLabel}>Saved addresses</Text>
-            {savedAddresses.map((entry: any, index: number) => {
-              const isSelected = entry.id === selectedAddressId;
+              {savedAddresses.map((entry: any, index: number) => {
+              const isSelected = String(entry.id) === String(selectedAddressId);
+              const isEditing = String(editingAddressId) === String(entry.id);
               return (
-                <TouchableOpacity key={getListItemKey(entry, index, 'address')} style={[styles.addressOptionCard, isSelected && styles.addressOptionCardActive]} onPress={() => selectAddress(entry)}>
-                  <View style={styles.addressOptionHeaderRow}>
-                    <Text style={styles.infoValue}>{entry.label}</Text>
-                    {isSelected ? <View style={styles.addressBadge}><Text style={styles.addressBadgeText}>Selected</Text></View> : null}
-                  </View>
-                  {entry.address ? <Text style={styles.addressText}>{entry.address}</Text> : null}
-                  {entry.phone ? <Text style={styles.infoLabel}>{entry.phone}</Text> : null}
-                </TouchableOpacity>
+                <View key={getListItemKey(entry, index, 'address')} style={[styles.addressOptionCard, isSelected && styles.addressOptionCardActive]}>
+                  {isEditing ? (
+                    <>
+                      <View style={styles.addressOptionHeaderRow}>
+                        <TextInput style={[styles.inputField, { flex: 1, marginRight: 8 }]} value={editingAddressLabel} onChangeText={setEditingAddressLabel} placeholder="Label (Home, Office)" placeholderTextColor="#9CA3AF" />
+                        <View style={{ flexDirection: 'row' }}>
+                          <TouchableOpacity style={[styles.primaryButton, { paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8 }]} onPress={() => saveEditedAddress(entry.id)}>
+                            <Text style={styles.primaryButtonText}>Save</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity style={[styles.secondaryButton, { marginLeft: 8, paddingVertical: 8, paddingHorizontal: 12, borderRadius: 8 }]} onPress={cancelEditAddress}>
+                            <Text style={styles.secondaryButtonText}>Cancel</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                      <TextInput style={styles.inputField} value={editingAddressPhone} onChangeText={setEditingAddressPhone} placeholder="Phone number" placeholderTextColor="#9CA3AF" keyboardType="phone-pad" />
+                    </>
+                  ) : (
+                    <TouchableOpacity style={{}} onPress={() => selectAddress(entry)}>
+                      <View style={styles.addressOptionHeaderRow}>
+                        <Text style={styles.infoValue}>{entry.label}</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          {isSelected ? <View style={styles.addressBadge}><Text style={styles.addressBadgeText}>Selected</Text></View> : null}
+                          <TouchableOpacity style={{ marginLeft: 8, padding: 6 }} onPress={() => startEditAddress(entry)}>
+                            <Text style={{ fontSize: 14, color: '#9CA3AF' }}>✏️</Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity style={{ marginLeft: 8, padding: 6 }} onPress={() => {
+                            Alert.alert('Delete address', `Remove \"${entry.label}\" from your saved addresses?`, [
+                              { text: 'Cancel', style: 'cancel' },
+                              { text: 'Delete', style: 'destructive', onPress: () => deleteAddress(entry.id) },
+                            ]);
+                          }}>
+                            <Text style={{ fontSize: 14, color: '#9CA3AF' }}>🗑</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                      {entry.address ? <Text style={styles.addressText}>{entry.address}</Text> : null}
+                      {entry.phone ? <Text style={styles.infoLabel}>{entry.phone}</Text> : null}
+                    </TouchableOpacity>
+                  )}
+                </View>
               );
             })}
 
@@ -2534,12 +3111,17 @@ export default function App() {
             </View>
 
             <TouchableOpacity style={styles.secondaryButton} onPress={() => {
-              setProfile((prev: any) => (prev ? { ...prev, address: deliveryAddress } : prev));
+              const chosen = savedAddresses.find((a: any) => String(a.id) === String(selectedAddressId));
+              if (chosen) {
+                setProfile((prev: any) => (prev ? { ...prev, address: chosen.address || deliveryAddress, district: chosen.district || prev.district, village: chosen.village || prev.village } : prev));
+              } else {
+                setProfile((prev: any) => (prev ? { ...prev, address: deliveryAddress } : prev));
+              }
               setProfileRoute(addressRouteReturnTarget);
             }}>
               <Text style={styles.secondaryButtonText}>Use this address</Text>
             </TouchableOpacity>
-          </View>
+          </ScrollView>
         </View>
       );
     }
@@ -3129,15 +3711,20 @@ const renderHomeBody = () => {
         return new Date(b?.updated_at || b?.created_at || 0).getTime() - new Date(a?.updated_at || a?.created_at || 0).getTime();
       }),
       assignedHomeProductKeys,
+      15,
     );
     const dealsOfTheDay = takeUnassignedProducts(
       [...products].sort((a, b) => profitFor(b) - profitFor(a)),
       assignedHomeProductKeys,
+      15,
     );
     const freshPicks = takeUnassignedProducts(
       [...products].sort((a, b) => profitFor(a) - profitFor(b)),
       assignedHomeProductKeys,
+      15,
     );
+
+    
 
     const heroBanner = banners[0];
     // Force the hero background to the given Cloudinary image (ignore banner overrides)
@@ -3621,6 +4208,8 @@ const styles = StyleSheet.create({
   logoImageWrapper: { width: 140, height: 48, borderRadius: 12, overflow: 'hidden', backgroundColor: 'transparent' },
   logoImage: { width: '100%', height: '100%', resizeMode: 'cover' },
   tagline: { marginTop: 4, color: '#E6EEF6', fontSize: 10, fontWeight: '700', letterSpacing: 1.7, textTransform: 'uppercase' },
+  sidebarToggleButton: { paddingHorizontal: 8, paddingVertical: 6, borderRadius: 10, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'center' },
+  sidebarToggleText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
   logoBadge: { position: 'absolute', top: -7, right: 12, width: 14, height: 14, borderRadius: 7, backgroundColor: '#2563EB' },
   badge: { position: 'absolute', top: -4, right: -4, backgroundColor: '#F5821F', borderRadius: 10, minWidth: 20, height: 20, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 4, borderWidth: 2, borderColor: '#01143F' },
   badgeText: { color: '#FFFFFF', fontSize: 10, fontWeight: '700' },
@@ -3670,6 +4259,9 @@ const styles = StyleSheet.create({
   addressCard: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: 16, borderWidth: 1, borderColor: '#E5E7EB' },
   addressText: { fontSize: 13, color: '#6B7280', lineHeight: 20, marginTop: 8 },
   addressInput: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12, color: '#111827', minHeight: 120, textAlignVertical: 'top', marginBottom: 16 },
+  locationHint: { fontSize: 12, color: '#94A3B8', marginTop: 6, marginBottom: 6 },
+  locationTypeInput: { backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB', borderRadius: 12, paddingHorizontal: 10, paddingVertical: 8, color: '#111827', marginBottom: 10 },
+  locationSelectDisabled: { opacity: 0.5 },
   paymentCard: { backgroundColor: '#FFFFFF', borderRadius: 18, padding: 16, borderWidth: 1, borderColor: '#E5E7EB' },
   paymentLabel: { fontSize: 12, color: '#6B7280', marginBottom: 8, textTransform: 'uppercase', letterSpacing: 1 },
   paymentOptionRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
@@ -3937,7 +4529,6 @@ const styles = StyleSheet.create({
   inputField: { borderWidth: 1, borderColor: '#DCE5F1', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 13, marginTop: 8, color: '#0F172A', fontSize: 14, backgroundColor: '#F8FAFC' },
   locationLabel: { color: '#64748B', fontSize: 12, fontWeight: '700', marginTop: 12, marginBottom: 4 },
   locationSelect: { minHeight: 50, borderWidth: 1, borderColor: '#DCE5F1', borderRadius: 14, paddingHorizontal: 14, backgroundColor: '#F8FAFC', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-  locationSelectDisabled: { opacity: 0.5 },
   locationSelectValue: { color: '#0F172A', fontSize: 14, fontWeight: '600' },
   locationSelectPlaceholder: { color: '#94A3B8', fontSize: 14 },
   locationSelectArrow: { color: '#F5821F', fontSize: 20, fontWeight: '800' },
@@ -4035,6 +4626,7 @@ const styles = StyleSheet.create({
   addressOptionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   addressBadge: { backgroundColor: '#EAFBF2', borderRadius: 999, paddingHorizontal: 8, paddingVertical: 4 },
   addressBadgeText: { color: '#166534', fontSize: 10, fontWeight: '800' },
+  
   menuLabelWrap: { flexDirection: 'row', alignItems: 'center', flex: 1 },
   menuIconShell: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#F7F7F9', justifyContent: 'center', alignItems: 'center', marginRight: 12 },
   menuIcon: { fontSize: 14 },

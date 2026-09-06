@@ -155,7 +155,39 @@ export async function sendReceiptEmail(token: string, receiptId: string) {
 
 export async function fetchReport(token: string, reportType: string, params?: Record<string, string>) {
   const query = params ? `?${new URLSearchParams(params).toString()}` : ''
-  return request<any>(`/api/admin/reports/${reportType}/${query}`, {}, token)
+  return request<any>(`/api/admin/reports/${reportType}/` + query, {}, token)
+}
+
+export async function downloadReport(token: string, reportType: string, params?: Record<string, string>, format: 'csv' | 'excel' = 'csv') {
+  const query = params ? `${new URLSearchParams(params).toString()}` : ''
+  const sep = query ? '&' : '?'
+  const url = `${API_BASE_URL}/api/admin/reports/${reportType}/${query ? `?${query}` : ''}${sep}format=${format}`
+
+  let accessToken = token
+  let response = await fetch(url, {
+    method: 'GET',
+    headers: new Headers({ Authorization: `Bearer ${accessToken}` }),
+  })
+
+  if (response.status === 401) {
+    try {
+      accessToken = await refreshAccessToken()
+      response = await fetch(url, {
+        method: 'GET',
+        headers: new Headers({ Authorization: `Bearer ${accessToken}` }),
+      })
+    } catch (err) {
+      const text = await response.text().catch(() => '')
+      throw new Error(text || 'Unable to download report.')
+    }
+  }
+
+  if (!response.ok) {
+    const errorText = await response.text().catch(() => '')
+    throw new Error(errorText || 'Unable to download report.')
+  }
+
+  return response.blob()
 }
 
 export async function sendReportEmail(token: string, reportType: string, body: any) {

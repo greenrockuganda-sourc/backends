@@ -7,6 +7,7 @@ import re
 from decimal import Decimal
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
+import json
 
 import cloudinary
 import cloudinary.uploader
@@ -42,7 +43,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from .models import Brand, CartItem, Category, Customer, Delivery, Notification, Order, OrderItem, OrderStatusHistory, Payment, Product, Recipe, Receipt, Review, ShoppingCart
+from .models import Brand, CartItem, Category, Customer, Delivery, Notification, PushToken, Order, OrderItem, OrderStatusHistory, Payment, Product, Recipe, Receipt, Review, ShoppingCart
 from .serializers import (
     BrandSerializer,
     BrandWriteSerializer,
@@ -55,6 +56,7 @@ from .serializers import (
     DeliveryUpdateSerializer,
     ForgotPasswordSerializer,
     NotificationReadSerializer,
+    PushTokenSerializer,
     OrderCreateSerializer,
     OrderStatusSerializer,
     PaymentUpdateSerializer,
@@ -1521,15 +1523,90 @@ class AdminDeliveryListAPIView(APIView):
 
     def get(self, request):
         deliveries = Delivery.objects.select_related('order', 'order__customer__user').all().order_by('-created_at')
-        data = [{
-            'id': delivery.id,
-            'order_number': delivery.order.order_number,
-            'customer': delivery.order.customer.user.get_full_name() or delivery.order.customer.user.email,
-            'delivery_address': delivery.order.delivery_address,
-            'delivery_status': delivery.delivery_status,
-            'delivery_date': delivery.delivery_date.isoformat() if delivery.delivery_date else None,
-        } for delivery in deliveries]
+        data = []
+        for delivery in deliveries:
+            # map backend fields to dashboard frontend expectations
+            order = getattr(delivery, 'order', None)
+            receipt_exists = False
+            try:
+                receipt_exists = Receipt.objects.filter(order=order).exists()
+            except Exception:
+                receipt_exists = False
+
+            # normalize status to frontend keys
+            status_map = {
+                'Preparing': 'pending',
+                'Pending': 'pending',
+                'Out for Delivery': 'in-transit',
+                'In Transit': 'in-transit',
+                'Delivered': 'delivered',
+                'Cancelled': 'failed',
+            }
+            s = (delivery.delivery_status or '').strip()
+            normalized_status = status_map.get(s, s.lower() or 'pending')
+
+            data.append({
+                'id': str(delivery.id),
+                'orderId': str(order.id) if order else None,
+                'orderNumber': order.order_number if order else None,
+                'deliveryPersonName': delivery.delivery_person,
+                'deliveryPersonPhone': delivery.delivery_phone,
+                'location': delivery.order.delivery_address if delivery.order else None,
+                'estimatedDeliveryTime': delivery.estimated_delivery_time.isoformat() if getattr(delivery, 'estimated_delivery_time', None) else None,
+                'status': normalized_status,
+                'receiptIssued': bool(receipt_exists),
+            })
+
         return Response(data, status=status.HTTP_200_OK)
+
+    def post(self, request):
+        # Create a new delivery record from dashboard form
+        order_number = (request.data.get('orderNumber') or request.data.get('order_number') or '').strip()
+        delivery_person = (request.data.get('deliveryPersonName') or request.data.get('delivery_person_name') or '').strip()
+        delivery_phone = (request.data.get('deliveryPersonPhone') or request.data.get('delivery_person_phone') or '').strip()
+        location = (request.data.get('location') or '').strip()
+        est_time = request.data.get('estimatedDeliveryTime') or request.data.get('estimated_delivery_time')
+        status_in = (request.data.get('status') or '').strip()
+
+        if not order_number:
+            return Response({'detail': 'orderNumber is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        order = Order.objects.filter(order_number=order_number).first()
+        if not order:
+            return Response({'detail': 'Order not found for provided orderNumber.'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Map frontend status values back to model status options
+        rev_status_map = {
+            'pending': 'Preparing',
+            'in-transit': 'Out for Delivery',
+            'delivered': 'Delivered',
+            'failed': 'Cancelled',
+        }
+        delivery_status = rev_status_map.get(status_in, status_in or 'Preparing')
+
+        try:
+            delivery = Delivery.objects.create(
+                order=order,
+                delivery_status=delivery_status,
+                delivery_person=delivery_person or None,
+                delivery_phone=delivery_phone or None,
+                estimated_delivery_time=est_time or None,
+            )
+        except Exception:
+            logging.exception('Failed to create delivery')
+            return Response({'detail': 'Failed to create delivery.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({
+            'id': str(delivery.id),
+            'orderId': str(order.id),
+            'orderNumber': order.order_number,
+            'deliveryPersonName': delivery.delivery_person,
+            'deliveryPersonPhone': delivery.delivery_phone,
+            'location': order.delivery_address,
+            'estimatedDeliveryTime': delivery.estimated_delivery_time.isoformat() if delivery.estimated_delivery_time else None,
+            'status': status_in or 'pending',
+            'receiptIssued': False,
+        }, status=status.HTTP_201_CREATED)
 
 
 class AdminDeliveryDetailAPIView(APIView):
@@ -1555,6 +1632,29 @@ class AdminDeliveryDetailAPIView(APIView):
             delivery.delivery_date = timezone.now()
         delivery.save()
         return Response({'message': 'Delivery updated.'}, status=status.HTTP_200_OK)
+
+
+class DeliveryReceiptAPIView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, delivery_id):
+        delivery = Delivery.objects.filter(pk=delivery_id).select_related('order').first()
+        if not delivery:
+            return Response({'detail': 'Delivery not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        order = getattr(delivery, 'order', None)
+        if not order:
+            return Response({'detail': 'Associated order not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        receipt, created = ensure_receipt_for_order(order, request=request)
+
+        return Response({
+            'id': receipt.id,
+            'receipt_number': receipt.receipt_number,
+            'order_id': order.id,
+            'total_amount': float(receipt.total_amount),
+            'created': created,
+        }, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
 
 
 class AdminReceiptListAPIView(APIView):
@@ -1636,6 +1736,105 @@ class AdminNotificationDetailAPIView(APIView):
             return Response({'detail': 'Notification not found.'}, status=status.HTTP_404_NOT_FOUND)
         notification.delete()
         return Response({'message': 'Notification deleted.'}, status=status.HTTP_200_OK)
+
+
+class RegisterPushTokenAPIView(APIView):
+    """Register or update an Expo/device push token.
+
+    Accepts JSON: { "token": "ExpoPushToken[...]", "device_info": "optional" }
+    If the request is authenticated, the token will be associated with the user.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        token = (request.data.get('token') or '').strip()
+        device_info = (request.data.get('device_info') or request.data.get('device') or '').strip()
+        if not token:
+            return Response({'detail': 'Token is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        defaults = {'device_info': device_info}
+        if request.user and getattr(request.user, 'is_authenticated', False):
+            defaults['user'] = request.user
+
+        try:
+            obj, created = PushToken.objects.update_or_create(token=token, defaults=defaults)
+        except Exception:
+            return Response({'detail': 'Unable to save token.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        # Ensure association if already existed without user but now authenticated
+        if request.user and getattr(request.user, 'is_authenticated', False) and obj.user != request.user:
+            obj.user = request.user
+            obj.device_info = device_info or obj.device_info
+            obj.save(update_fields=['user', 'device_info', 'updated_at'])
+
+        return Response({'token': obj.token}, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+
+class BroadcastNotificationAPIView(APIView):
+    """Allow sellers/admins to broadcast a notification to all salon owners (customers).
+
+    POST payload: { "title": "...", "message": "...", "notification_type": "optional" }
+    """
+
+    permission_classes = [IsAdminUser]
+
+    def post(self, request):
+        title = (request.data.get('title') or '').strip()
+        message = (request.data.get('message') or '').strip()
+        notification_type = (request.data.get('notification_type') or '').strip()
+
+        if not title or not message:
+            return Response({'detail': 'Both title and message are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Target salon owners (Customers)
+        customers = Customer.objects.select_related('user').all()
+        users = [c.user for c in customers if getattr(c, 'user', None)]
+
+        # Create Notification objects for each user
+        notifications = []
+        for user in users:
+            notifications.append(Notification(user=user, title=title, message=message, notification_type=notification_type or None))
+        try:
+            Notification.objects.bulk_create(notifications)
+        except Exception:
+            logging.exception('Failed to create notification records')
+
+        # Collect push tokens
+        tokens = list(PushToken.objects.filter(user__in=users).values_list('token', flat=True).distinct())
+
+        sent = 0
+        if tokens:
+            expo_url = 'https://exp.host/--/api/v2/push/send'
+            # Build messages for all tokens
+            messages = []
+            for t in tokens:
+                messages.append({
+                    'to': t,
+                    'sound': 'default',
+                    'title': title,
+                    'body': message,
+                    'data': {'type': notification_type or 'broadcast'},
+                })
+
+            # Send in chunks of 100
+            chunk_size = 100
+            for i in range(0, len(messages), chunk_size):
+                chunk = messages[i:i+chunk_size]
+                try:
+                    req = Request(expo_url, data=json.dumps(chunk).encode('utf-8'), headers={'Accept': 'application/json', 'Content-Type': 'application/json'})
+                    resp = urlopen(req, timeout=10)
+                    resp_data = resp.read()
+                    try:
+                        resp_json = json.loads(resp_data.decode('utf-8'))
+                        # expo returns an array of receipts; count optimistic
+                        sent += len(chunk)
+                    except Exception:
+                        sent += len(chunk)
+                except Exception:
+                    logging.exception('Failed to send push chunk')
+
+        return Response({'message': 'Broadcast queued', 'recipients': len(users), 'tokens_sent': sent}, status=status.HTTP_200_OK)
 
 
 class ReportAPIView(APIView):
@@ -2224,11 +2423,23 @@ class ReceiptAPIView(APIView):
         order = Order.objects.filter(pk=order_id).first()
         if not order:
             return Response({'detail': 'Order not found.'}, status=status.HTTP_404_NOT_FOUND)
-        if not request.user.is_staff and order.customer.user != request.user:
+        # Allow staff or admin/seller role users to generate receipts for any order
+        user_role = str(getattr(request.user, 'role', '') or '').strip().lower()
+        if not (getattr(request.user, 'is_staff', False) or user_role in {'admin', 'seller'} or order.customer.user == request.user):
             return Response({'detail': 'You do not have permission to generate a receipt.'}, status=status.HTTP_403_FORBIDDEN)
 
         receipt, created = ensure_receipt_for_order(order, request=request)
+
+        # Ensure pdf_url is set to admin PDF endpoint if missing
+        if not receipt.pdf_url:
+            try:
+                receipt.pdf_url = request.build_absolute_uri(f'/api/admin/receipts/{receipt.id}/pdf/')
+                receipt.save(update_fields=['pdf_url'])
+            except Exception:
+                pass
+
         return Response({
+            'id': receipt.id,
             'message': 'Receipt generated.' if created else 'Receipt already exists.',
             'receipt_number': receipt.receipt_number,
             'pdf_url': receipt.pdf_url,

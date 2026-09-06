@@ -107,6 +107,19 @@ export default function Receipts({ token }: ReceiptsProps) {
     } finally { setBusyReceipt(null) }
   }
 
+  const handlePrintReceipt = (receipt: Receipt) => {
+    // Select the receipt (open preview) and print after render
+    setSelectedReceipt(receipt)
+    // Give React time to render the preview modal before calling print
+    setTimeout(() => {
+      try {
+        window.print()
+      } catch (e) {
+        console.error('Print failed', e)
+      }
+    }, 250)
+  }
+
   return (
     <div className="p-3 sm:p-6 lg:p-8">
       <div className="mb-6 sm:mb-8">
@@ -159,34 +172,34 @@ export default function Receipts({ token }: ReceiptsProps) {
                     <td data-label="Receipt" className="px-6 py-4 text-sm font-medium text-blue-600">{receipt.receiptNumber}</td>
                     <td data-label="Order" className="px-6 py-4 text-sm text-gray-900">{receipt.orderNumber}</td>
                     <td data-label="Customer" className="px-6 py-4 text-sm text-gray-900">{receipt.customer}</td>
-                    <td data-label="Items" className="px-6 py-4 text-sm text-gray-900">
+                    <td data-label="Items" className="px-6 py-4 text-sm text-gray-700">
                       <div className="space-y-1">
                         {Array.isArray(receipt.items) && receipt.items.length > 0 ? receipt.items.map((item, index) => (
-                          <div key={`${receipt.id}-${index}`} className="font-medium">{item.product_name}</div>
+                          <div key={`${receipt.id}-${index}`} className="font-medium text-gray-700">{item.product_name}</div>
                         )) : <span className="text-gray-400">No items</span>}
                       </div>
                     </td>
-                    <td data-label="Qty" className="px-6 py-4 text-sm text-gray-900">
+                    <td data-label="Qty" className="px-6 py-4 text-sm text-gray-700">
                       <div className="space-y-1">
                         {Array.isArray(receipt.items) && receipt.items.length > 0 ? receipt.items.map((item, index) => (
                           <div key={`${receipt.id}-qty-${index}`}>{item.quantity}</div>
                         )) : <span className="text-gray-400">—</span>}
                       </div>
                     </td>
-                    <td data-label="Cost Each" className="px-6 py-4 text-sm text-gray-900">
+                    <td data-label="Cost Each" className="px-6 py-4 text-sm text-gray-700">
                       <div className="space-y-1">
                         {Array.isArray(receipt.items) && receipt.items.length > 0 ? receipt.items.map((item, index) => (
-                          <div key={`${receipt.id}-price-${index}`}>{formatCurrency(item.unit_price)}</div>
+                          <div key={`${receipt.id}-price-${index}`} className="text-gray-700">{formatCurrency(item.unit_price)}</div>
                         )) : <span className="text-gray-400">—</span>}
                       </div>
                     </td>
-                    <td data-label="Total" className="px-6 py-4 text-sm font-medium text-gray-900">
+                    <td data-label="Total" className="px-6 py-4 text-sm font-medium text-gray-700">
                       <div className="space-y-1">
                         {Array.isArray(receipt.items) && receipt.items.length > 0 ? receipt.items.map((item, index) => (
-                          <div key={`${receipt.id}-sub-${index}`}>{formatCurrency(item.subtotal)}</div>
+                          <div key={`${receipt.id}-sub-${index}`} className="text-gray-700">{formatCurrency(item.subtotal)}</div>
                         )) : <span className="text-gray-400">—</span>}
                       </div>
-                      <div className="mt-2 border-t border-gray-200 pt-2">{formatCurrency(receipt.amount)}</div>
+                      <div className="mt-2 border-t border-gray-200 pt-2 text-gray-700">{formatCurrency(receipt.amount)}</div>
                     </td>
                     <td data-label="Date" className="px-6 py-4 text-sm text-gray-500">{receipt.date}</td>
                     <td data-label="Actions" className="px-6 py-4 text-sm">
@@ -199,7 +212,7 @@ export default function Receipts({ token }: ReceiptsProps) {
                           <Eye size={14} />
                           <span>Preview</span>
                         </button>
-                        <button onClick={() => handlePrint()} className="text-blue-600 hover:text-blue-800 p-2" title="Print">
+                        <button onClick={() => handlePrintReceipt(receipt)} className="text-blue-600 hover:text-blue-800 p-2" title="Print">
                           <Printer size={18} />
                         </button>
                         <button
@@ -237,6 +250,13 @@ export default function Receipts({ token }: ReceiptsProps) {
             </div>
 
             <div className="border border-gray-300 p-6">
+              {/* Print-only header - hidden on screen, visible in print */}
+              <div className="print-only print-header">
+                <div className="text-center">
+                  <div className="text-lg font-bold">Glow Salon</div>
+                  <div className="text-sm">123 Salon Lane, Kampala • support@glow.com • +256 700 000 000</div>
+                </div>
+              </div>
               <div className="text-center mb-6 border-b border-gray-300 pb-4">
                 <h2 className="text-2xl font-bold text-gray-900">RECEIPT</h2>
                 <p className="text-gray-600">Receipt #{selectedReceipt.receiptNumber}</p>
@@ -274,6 +294,14 @@ export default function Receipts({ token }: ReceiptsProps) {
                     )}
                   </tbody>
                 </table>
+              </div>
+
+              {/* Print-only footer - shows page number */}
+              <div className="print-only print-footer mt-4">
+                <div className="flex items-center justify-between text-sm">
+                  <div>Glow Salon — Professional receipts</div>
+                  <div className="page-number">Page 1</div>
+                </div>
               </div>
 
               <div className="text-right border-t border-gray-300 pt-4">

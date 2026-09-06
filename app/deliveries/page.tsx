@@ -91,7 +91,6 @@ export default function DeliveriesPage() {
                     <th className="px-6 py-3 text-left font-semibold">Location</th>
                     <th className="px-6 py-3 text-center font-semibold">Status</th>
                     <th className="px-6 py-3 text-center font-semibold">Receipt</th>
-                    <th className="px-6 py-3 text-center font-semibold">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
@@ -120,17 +119,6 @@ export default function DeliveriesPage() {
                             </div>
                           ) : (
                             <span className="text-xs text-muted-foreground">Pending</span>
-                          )}
-                        </td>
-                        <td className="px-6 py-4 text-center">
-                          {delivery.status === 'delivered' && !delivery.receiptIssued && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleIssueReceipt(delivery.id)}
-                            >
-                              Issue Receipt
-                            </Button>
                           )}
                         </td>
                       </tr>
