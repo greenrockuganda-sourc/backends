@@ -57,7 +57,8 @@ const getBackendCandidates = () => {
 };
 
 const getRailwayApiBaseUrl = (): string | null => {
-  const extras = (Constants.expoConfig?.extra ?? Constants.manifest?.extra) as Record<string, unknown> | undefined;
+  const manifestExtra = (Constants as any).expoConfig?.extra ?? (Constants as any).manifest?.extra ?? (Constants as any).manifest2?.extra;
+  const extras = manifestExtra as Record<string, unknown> | undefined;
   const raw = extras?.apiBaseUrl || process.env.EXPO_PUBLIC_API_BASE_URL || process.env.API_BASE_URL;
   if (typeof raw !== 'string') {
     return null;
@@ -238,6 +239,8 @@ const OrderItemCard = React.memo(({ item, onView, onRetry }: { item: any; onView
   const orderImages = getOrderImageUrls(item);
   const visibleImages = orderImages.slice(0, 3);
   const itemCount = Array.isArray(item.items) ? item.items.length : Number(item.item_count || 0);
+  const salonName = item.salon_name || item.business_name || item.salonName || item.customer?.salon_name || item.customer?.business_name || 'Salon order';
+  const deliveryAddress = item.delivery_address || item.address || item.shipping_address || item.deliveryAddress || item.location || item.customer_address || 'Delivery address pending';
 
   return (
     <View style={styles.orderCard}>
@@ -245,6 +248,8 @@ const OrderItemCard = React.memo(({ item, onView, onRetry }: { item: any; onView
         <View style={styles.orderCardHeaderLeft}>
           <Text style={styles.orderNumber}>Order #{item.order_number || item.id}</Text>
           <Text style={styles.orderDate}>{orderDate}</Text>
+          <Text style={styles.orderDate}>{salonName}</Text>
+          <Text style={styles.orderDate}>{deliveryAddress}</Text>
         </View>
         <View style={[styles.statusBadge, getOrderStatusStyle(status)]}>
           <Text style={styles.statusBadgeText}>{status}</Text>
@@ -289,12 +294,70 @@ const OrderItemCard = React.memo(({ item, onView, onRetry }: { item: any; onView
   );
 });
 
+const normalizeOrderValue = (value: any) => {
+  if (value === null || value === undefined || value === '') return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'object') {
+    const nested = value.name || value.title || value.label || value.salon_name || value.business_name || value.address || value.delivery_address || value.customer_name || '';
+    return typeof nested === 'string' ? nested.trim() : String(nested).trim();
+  }
+  return String(value).trim();
+};
+
 const normalizeOrdersPayload = (payload: any) => {
-  if (Array.isArray(payload)) return payload;
-  if (Array.isArray(payload?.results)) return payload.results;
-  if (Array.isArray(payload?.orders)) return payload.orders;
-  if (Array.isArray(payload?.data)) return payload.data;
-  return [];
+  const items = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.results)
+      ? payload.results
+      : Array.isArray(payload?.orders)
+        ? payload.orders
+        : Array.isArray(payload?.data)
+          ? payload.data
+          : [];
+
+  return items.map((order: any) => {
+    const normalizedOrder = { ...order };
+    const customer = order?.customer || {};
+    const user = order?.user || {};
+    const salonName = normalizeOrderValue(
+      order?.salon_name
+      || order?.salonName
+      || order?.business_name
+      || order?.seller_name
+      || order?.shop_name
+      || customer?.salon_name
+      || customer?.business_name
+      || customer?.shop_name
+      || user?.salon_name
+      || user?.business_name
+      || user?.shop_name
+      || order?.customer_name
+      || customer?.name
+      || user?.name
+      || user?.full_name
+    );
+    const deliveryAddress = normalizeOrderValue(
+      order?.delivery_address
+      || order?.deliveryAddress
+      || order?.shipping_address
+      || order?.address
+      || order?.customer_address
+      || order?.location
+      || customer?.address
+      || customer?.delivery_address
+      || customer?.location
+      || user?.address
+      || user?.delivery_address
+    );
+
+    normalizedOrder.salon_name = salonName;
+    normalizedOrder.business_name = salonName || normalizedOrder.business_name || '';
+    normalizedOrder.delivery_address = deliveryAddress;
+    normalizedOrder.address = deliveryAddress || normalizedOrder.address || '';
+    normalizedOrder.customer_name = normalizeOrderValue(order?.customer_name || customer?.name || user?.name || user?.full_name || normalizedOrder.customer_name);
+
+    return normalizedOrder;
+  });
 };
 
 const getCategoryTextValue = (value: any) => {
@@ -2498,6 +2561,8 @@ export default function App() {
 
     const selectedOrderHeader = selectedOrder ? (() => {
       const orderDate = selectedOrder.created_at ? new Date(selectedOrder.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Pending';
+      const selectedSalonName = selectedOrder.salon_name || selectedOrder.business_name || selectedOrder.salonName || selectedOrder.customer?.salon_name || 'Salon order';
+      const selectedDeliveryAddress = selectedOrder.delivery_address || selectedOrder.address || selectedOrder.shipping_address || selectedOrder.deliveryAddress || selectedOrder.location || selectedOrder.customer_address || 'Delivery address pending';
       const trackingSteps = getOrderTrackingSteps(selectedOrder);
       const eta = getDeliveryEta(selectedOrder);
       const trackingHistory = getTrackingHistory(selectedOrder);
@@ -2513,6 +2578,8 @@ export default function App() {
               <View style={{ flex: 1, paddingRight: 8 }}>
                 <Text style={styles.detailNumber}>{selectedOrder.order_number || `#${selectedOrder.id}`}</Text>
                 <Text style={styles.detailMeta}>{orderDate}</Text>
+                <Text style={styles.detailMeta}>{selectedSalonName}</Text>
+                <Text style={styles.detailMeta}>{selectedDeliveryAddress}</Text>
                 <Text style={styles.detailMeta}>{selectedOrder.payment_method || 'Pay on Delivery'}</Text>
               </View>
               <TouchableOpacity style={styles.detailCloseButton} onPress={() => setSelectedOrderId(null)}>

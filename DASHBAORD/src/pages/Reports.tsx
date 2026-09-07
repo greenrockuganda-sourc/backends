@@ -7,6 +7,7 @@ const reportTypes = [
   { value: 'sales', label: 'Sales Summary' },
   { value: 'orders', label: 'Order Details' },
   { value: 'products', label: 'Inventory Snapshot' },
+  { value: 'categories', label: 'Category Report' },
   { value: 'customers', label: 'Customer Report' },
 ] as const
 
@@ -117,6 +118,35 @@ export default function Reports({ token }: ReportsProps) {
                     <td className="px-4 py-3">{item.product_name}</td>
                     <td className="px-4 py-3">{item.stock}</td>
                     <td className="px-4 py-3">{item.status}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )
+    }
+
+    if (reportType === 'categories') {
+      return (
+        <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-sm text-gray-700">
+              <thead className="border-b border-gray-200 text-xs uppercase tracking-wide text-gray-500">
+                <tr>
+                  <th className="px-4 py-3">Category</th>
+                  <th className="px-4 py-3">Orders</th>
+                  <th className="px-4 py-3">Units</th>
+                  <th className="px-4 py-3">Revenue</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(report.categories ?? []).map((item: any, index: number) => (
+                  <tr key={index} className="border-b border-gray-100 hover:bg-gray-50">
+                    <td className="px-4 py-3">{item.category_name}</td>
+                    <td className="px-4 py-3">{item.total_orders ?? 0}</td>
+                    <td className="px-4 py-3">{item.total_quantity ?? 0}</td>
+                    <td className="px-4 py-3">UGX {(item.total_revenue ?? 0).toFixed(2)}</td>
                   </tr>
                 ))}
               </tbody>

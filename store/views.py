@@ -164,6 +164,33 @@ def _generate_report_payload(report_type, start_date=None, end_date=None):
         payload = {'products': [{'product_name': product.product_name, 'stock': product.quantity_in_stock, 'status': product.status} for product in Product.objects.order_by('-quantity_in_stock')[:20]]}
     elif report_type == 'customers':
         payload = {'customers': [{'customer_name': customer.user.get_full_name() or customer.user.email, 'orders': customer.orders.count(), 'total_spend': float(customer.orders.aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00'))} for customer in Customer.objects.select_related('user').all()[:20]]}
+    elif report_type == 'categories':
+        category_rows = []
+        for category in Category.objects.prefetch_related('products__order_items__order').all().order_by('category_name'):
+            revenue = Decimal('0.00')
+            total_quantity = 0
+            order_ids = set()
+            for product in category.products.all():
+                for item in product.order_items.all():
+                    order = item.order
+                    if not order:
+                        continue
+                    order_date = getattr(order.order_date, 'date', lambda: order.order_date)()
+                    if start_date and order_date < start_date:
+                        continue
+                    if end_date and order_date > end_date:
+                        continue
+                    revenue += item.subtotal
+                    total_quantity += item.quantity
+                    order_ids.add(order.id)
+            category_rows.append({
+                'category_name': category.category_name,
+                'total_orders': len(order_ids),
+                'total_revenue': float(revenue),
+                'total_quantity': total_quantity,
+                'product_count': category.products.count(),
+            })
+        payload = {'categories': sorted(category_rows, key=lambda row: row['total_revenue'], reverse=True)[:20]}
     else:
         payload = None
 
@@ -186,6 +213,10 @@ def _render_report_csv(report_type, payload):
         writer.writerow(['product_name', 'stock', 'status'])
         for item in payload['products']:
             writer.writerow([item['product_name'], item['stock'], item['status']])
+    elif report_type == 'categories':
+        writer.writerow(['category_name', 'total_orders', 'total_revenue', 'total_quantity', 'product_count'])
+        for item in payload['categories']:
+            writer.writerow([item['category_name'], item['total_orders'], item['total_revenue'], item['total_quantity'], item['product_count']])
     else:
         writer.writerow(['customer_name', 'orders', 'total_spend'])
         for item in payload['customers']:
@@ -1525,15 +1556,21 @@ class AdminDeliveryListAPIView(APIView):
         deliveries = Delivery.objects.select_related('order', 'order__customer__user').all().order_by('-created_at')
         data = []
         for delivery in deliveries:
-            # map backend fields to dashboard frontend expectations
             order = getattr(delivery, 'order', None)
+            customer_name = ''
+            salon_name = ''
+            address = ''
+            if order:
+                customer_name = f"{order.customer.user.first_name} {order.customer.user.last_name}".strip() or order.customer.user.email
+                salon_name = order.customer.salon_name or ''
+                address = order.delivery_address or order.customer.address or ''
+
             receipt_exists = False
             try:
                 receipt_exists = Receipt.objects.filter(order=order).exists()
             except Exception:
                 receipt_exists = False
 
-            # normalize status to frontend keys
             status_map = {
                 'Preparing': 'pending',
                 'Pending': 'pending',
@@ -1549,9 +1586,14 @@ class AdminDeliveryListAPIView(APIView):
                 'id': str(delivery.id),
                 'orderId': str(order.id) if order else None,
                 'orderNumber': order.order_number if order else None,
+                'customer': customer_name,
+                'customer_name': customer_name,
+                'salon_name': salon_name,
                 'deliveryPersonName': delivery.delivery_person,
                 'deliveryPersonPhone': delivery.delivery_phone,
-                'location': delivery.order.delivery_address if delivery.order else None,
+                'location': address,
+                'address': address,
+                'delivery_address': address,
                 'estimatedDeliveryTime': delivery.estimated_delivery_time.isoformat() if getattr(delivery, 'estimated_delivery_time', None) else None,
                 'status': normalized_status,
                 'receiptIssued': bool(receipt_exists),
@@ -1662,14 +1704,22 @@ class AdminReceiptListAPIView(APIView):
 
     def get(self, request):
         receipts = Receipt.objects.select_related('order', 'order__customer__user').all().order_by('-created_at')
-        data = [{
-            'id': receipt.id,
-            'receipt_number': receipt.receipt_number,
-            'customer': receipt.order.customer.user.get_full_name() or receipt.order.customer.user.email,
-            'order_number': receipt.order.order_number,
-            'amount': float(receipt.total_amount),
-            'date': receipt.receipt_date.isoformat(),
-        } for receipt in receipts]
+        data = []
+        for receipt in receipts:
+            customer_name = receipt.order.customer.user.get_full_name() or receipt.order.customer.user.email
+            address = receipt.order.delivery_address or receipt.order.customer.address or ''
+            data.append({
+                'id': receipt.id,
+                'receipt_number': receipt.receipt_number,
+                'customer': customer_name,
+                'customer_name': customer_name,
+                'salon_name': receipt.order.customer.salon_name or '',
+                'address': address,
+                'delivery_address': address,
+                'order_number': receipt.order.order_number,
+                'amount': float(receipt.total_amount),
+                'date': receipt.receipt_date.isoformat(),
+            })
         return Response(data, status=status.HTTP_200_OK)
 
 
@@ -2292,12 +2342,17 @@ class AdminOrderListAPIView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
-        orders = Order.objects.all().order_by('-created_at')
+        orders = Order.objects.select_related('customer__user').all().order_by('-created_at')
         data = []
         for order in orders:
+            customer_name = f"{order.customer.user.first_name} {order.customer.user.last_name}".strip() or order.customer.user.email
             data.append({
                 'id': order.id,
-                'customer': f"{order.customer.user.first_name} {order.customer.user.last_name}".strip() or order.customer.user.email,
+                'customer': customer_name,
+                'customer_name': customer_name,
+                'salon_name': order.customer.salon_name or '',
+                'address': order.delivery_address or order.customer.address or '',
+                'delivery_address': order.delivery_address or order.customer.address or '',
                 'order_number': order.order_number,
                 'total_amount': float(order.total_amount),
                 'payment_status': order.payment_status,

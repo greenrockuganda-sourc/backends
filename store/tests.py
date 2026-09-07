@@ -8,7 +8,7 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import Brand, Category, Customer, Order, OrderItem, Product, Receipt, Recipe
+from .models import Brand, Category, Customer, Delivery, Order, OrderItem, Product, Receipt, Recipe
 from .views import generate_product_sku
 
 User = get_user_model()
@@ -64,6 +64,76 @@ class ReportEmailAPITests(TestCase):
         self.assertEqual(response.data['message'], 'Report email queued.')
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn('Weekly Sales Report', mail.outbox[0].subject)
+
+
+class AdminDataFieldAPITests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.admin_user = User.objects.create_user(
+            email='admin@example.com',
+            password='StrongPass123!',
+            first_name='Admin',
+            last_name='User',
+            phone_number='0700000000',
+            role='Admin',
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {str(RefreshToken.for_user(self.admin_user).access_token)}")
+
+        self.customer_user = User.objects.create_user(
+            email='salon@example.com',
+            password='StrongPass123!',
+            first_name='Nina',
+            last_name='Client',
+            phone_number='0701234567',
+            role='Customer',
+        )
+        self.customer = Customer.objects.create(
+            user=self.customer_user,
+            salon_name='Glow Studio',
+            address='Kampala, Ntinda',
+            district='Kampala',
+            city='Kampala',
+        )
+        self.order = Order.objects.create(
+            customer=self.customer,
+            order_number='ORD-TEST-001',
+            total_amount=20000,
+            delivery_address='Kampala, Ntinda',
+            phone_number='0701234567',
+            order_status='Pending',
+        )
+        self.delivery = Delivery.objects.create(
+            order=self.order,
+            delivery_status='Preparing',
+            delivery_person='James Rider',
+            delivery_phone='0701111111',
+        )
+        self.receipt = Receipt.objects.create(
+            order=self.order,
+            receipt_number='RCPT-TEST-001',
+            total_amount=20000,
+        )
+
+    def test_admin_list_endpoints_include_salon_name_and_address(self):
+        order_response = self.client.get(reverse('admin_orders'))
+        self.assertEqual(order_response.status_code, 200)
+        self.assertIn('salon_name', order_response.data[0])
+        self.assertEqual(order_response.data[0]['salon_name'], 'Glow Studio')
+        self.assertEqual(order_response.data[0]['delivery_address'], 'Kampala, Ntinda')
+
+        delivery_response = self.client.get(reverse('admin_deliveries'))
+        self.assertEqual(delivery_response.status_code, 200)
+        self.assertIn('salon_name', delivery_response.data[0])
+        self.assertEqual(delivery_response.data[0]['salon_name'], 'Glow Studio')
+        self.assertEqual(delivery_response.data[0]['address'], 'Kampala, Ntinda')
+
+        receipt_response = self.client.get(reverse('admin_receipts'))
+        self.assertEqual(receipt_response.status_code, 200)
+        self.assertIn('salon_name', receipt_response.data[0])
+        self.assertEqual(receipt_response.data[0]['salon_name'], 'Glow Studio')
+        self.assertEqual(receipt_response.data[0]['address'], 'Kampala, Ntinda')
 
 
 class AuthAndProfileAPITests(TestCase):
