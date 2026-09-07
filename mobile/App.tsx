@@ -25,7 +25,7 @@ import {
   Linking,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import * as Notifications from 'expo-notifications';
+import type * as Notifications from 'expo-notifications';
 import { DEFAULT_PRODUCT_IMAGE, formatCurrency, getOrderImageUrls } from './utils';
 
 const getBackendCandidates = () => {
@@ -82,6 +82,26 @@ const SPLASH_LOGO_URL = 'https://res.cloudinary.com/h78tlu47/image/upload/v17847
 const SPLASH_DELIVERY_IMAGE_URL = 'https://res.cloudinary.com/h78tlu47/image/upload/v1784708354/glow-logo-navy-bg_tzzdwd.jpg';
 const SIDEBAR_PERSIST_KEY = '@glow-show-sidebar-v1';
 const PUSH_TOKEN_STORAGE_KEY = '@glow-expo-push-token-v1';
+// Expo Go cannot register for remote push notifications from SDK 53 onward.
+// `appOwnership` is `expo` only when this bundle is running in Expo Go.
+const isRunningInExpoGo = Constants.appOwnership === 'expo';
+
+// expo-notifications creates native event emitters while its module is loading.
+// A development client built before the module was added does not contain those
+// native objects, which would otherwise prevent the whole app from starting.
+let notificationsModule: typeof Notifications | null | undefined;
+const getNotificationsModule = (): typeof Notifications | null => {
+  if (notificationsModule !== undefined) return notificationsModule;
+
+  try {
+    notificationsModule = require('expo-notifications') as typeof Notifications;
+  } catch (error) {
+    notificationsModule = null;
+    console.warn('[PUSH] Notifications are unavailable in this app build.', error);
+  }
+
+  return notificationsModule;
+};
 
 // Ensure React Native Image defaults to contain so images are shown in full
 try {
@@ -97,16 +117,14 @@ try {
   // ignore
 }
 
-// Configure notification presentation while app is foregrounded
-try {
-  Notifications.setNotificationHandler({
-    handleNotification: async () => ({ shouldShowAlert: true, shouldPlaySound: false, shouldSetBadge: false }),
-  });
-} catch (e) {
-  // if expo-notifications isn't available, ignore
-}
+// Uganda has over 71,000 villages. The district picker includes all 146
+// districts/cities; the area picker offers useful suggestions and also accepts
+// the customer's exact village, trading centre, or neighbourhood.
+const UGANDA_DISTRICTS = [
+  'Abim', 'Adjumani', 'Agago', 'Alebtong', 'Amolatar', 'Amudat', 'Amuria', 'Amuru', 'Apac', 'Arua', 'Arua City', 'Budaka', 'Bududa', 'Buhweju', 'Buikwe', 'Bukedea', 'Bukomansimbi', 'Bukwo', 'Bulambuli', 'Bulisa', 'Bundibugyo', 'Bunyangabu', 'Bushenyi', 'Busia', 'Butaleja', 'Butambala', 'Butebo', 'Buvuma', 'Buyende', 'Bugiri', 'Bugweri', 'Dokolo', 'Fort Portal City', 'Gomba', 'Gulu', 'Gulu City', 'Hoima', 'Hoima City', 'Ibanda', 'Iganga', 'Isingiro', 'Jinja', 'Jinja City', 'Kaabong', 'Kabale', 'Kabarole', 'Kaberamaido', 'Kagadi', 'Kakumiro', 'Kalaki', 'Kalangala', 'Kaliro', 'Kalungu', 'Kamuli', 'Kamwenge', 'Kanungu', 'Kapchorwa', 'Kapelebyong', 'Karenga', 'Kasese', 'Kassanda', 'Katakwi', 'Kayunga', 'Kazo', 'Kibale', 'Kiboga', 'Kibuku', 'Kikuube', 'Kiruhura', 'Kiryandongo', 'Kisoro', 'Kitagwenda', 'Kitgum', 'Koboko', 'Kole', 'Kotido', 'Kumi', 'Kwania', 'Kween', 'Kyankwanzi', 'Kyegegwa', 'Kyenjojo', 'Kyotera', 'Lamwo', 'Lira', 'Lira City', 'Luuka', 'Luwero', 'Lwengo', 'Lyantonde', 'Madi Okollo', 'Manafwa', 'Maracha', 'Masaka', 'Masaka City', 'Masindi', 'Mayuge', 'Mbale', 'Mbale City', 'Mbarara', 'Mbarara City', 'Mitooma', 'Mityana', 'Moroto', 'Moyo', 'Mpigi', 'Mubende', 'Mukono', 'Nabilatuk', 'Nakapiripirit', 'Nakaseke', 'Nakasongola', 'Namayingo', 'Namisindwa', 'Namutumba', 'Napak', 'Nebbi', 'Ngora', 'Ntoroko', 'Ntungamo', 'Nwoya', 'Obongi', 'Omoro', 'Otuke', 'Oyam', 'Pader', 'Pakwach', 'Pallisa', 'Rakai', 'Rubanda', 'Rubirizi', 'Rukiga', 'Rukungiri', 'Rwampara', 'Serere', 'Sheema', 'Sironko', 'Soroti', 'Soroti City', 'Ssembabule', 'Terego', 'Tororo', 'Wakiso', 'Yumbe', 'Zombo', 'Kampala',
+].sort();
 
-const DELIVERY_LOCATIONS: Record<string, string[]> = {
+const DELIVERY_AREA_SUGGESTIONS: Record<string, string[]> = {
   Kampala: ['Bugolobi', 'Bukoto', 'Bunga', 'Kawempe', 'Kibuli', 'Kisementi', 'Kololo', 'Makindye', 'Makerere', 'Ntinda', 'Rubaga', 'Muyenga'],
   Wakiso: ['Entebbe', 'Kira', 'Kisasi', 'Kyanja', 'Najjanankumbi', 'Nansana', 'Namugongo', 'Ssonde'],
   Mukono: ['Mukono Central', 'Nakifuma', 'Seeta'],
@@ -133,17 +151,24 @@ const DeliveryLocationSelector = ({
   onVillageChange: (value: string) => void;
 }) => {
   const [menu, setMenu] = useState<'district' | 'village' | null>(null);
-  const choices = menu === 'district' ? Object.keys(DELIVERY_LOCATIONS) : (DELIVERY_LOCATIONS[district] || []);
+  const [search, setSearch] = useState('');
+  const isDistrictMenu = menu === 'district';
+  const choices = (isDistrictMenu ? UGANDA_DISTRICTS : (DELIVERY_AREA_SUGGESTIONS[district] || []))
+    .filter((choice) => choice.toLowerCase().includes(search.trim().toLowerCase()));
+  const openMenu = (nextMenu: 'district' | 'village') => {
+    setSearch(nextMenu === 'village' ? village : '');
+    setMenu(nextMenu);
+  };
 
   return (
     <View>
       <Text style={styles.locationLabel}>District</Text>
-      <TouchableOpacity style={styles.locationSelect} onPress={() => setMenu('district')} accessibilityRole="button">
+      <TouchableOpacity style={styles.locationSelect} onPress={() => openMenu('district')} accessibilityRole="button">
         <Text style={district ? styles.locationSelectValue : styles.locationSelectPlaceholder}>{district || 'Select district'}</Text>
         <Text style={styles.locationSelectArrow}>⌄</Text>
       </TouchableOpacity>
       <Text style={styles.locationLabel}>Village / area</Text>
-      <TouchableOpacity style={[styles.locationSelect, !district && styles.locationSelectDisabled]} onPress={() => district && setMenu('village')} disabled={!district} accessibilityRole="button">
+      <TouchableOpacity style={[styles.locationSelect, !district && styles.locationSelectDisabled]} onPress={() => district && openMenu('village')} disabled={!district} accessibilityRole="button">
         <Text style={village ? styles.locationSelectValue : styles.locationSelectPlaceholder}>{village || 'Select village or area'}</Text>
         <Text style={styles.locationSelectArrow}>⌄</Text>
       </TouchableOpacity>
@@ -151,7 +176,23 @@ const DeliveryLocationSelector = ({
         <View style={styles.locationModalOverlay}>
           <View style={styles.locationModalCard}>
             <Text style={styles.locationModalTitle}>Select {menu === 'district' ? 'district' : 'village or area'}</Text>
+            <TextInput
+              style={styles.locationSearchInput}
+              value={search}
+              onChangeText={setSearch}
+              placeholder={menu === 'district' ? 'Search all Uganda districts' : 'Search or type your village / area'}
+              placeholderTextColor="#94A3B8"
+              autoFocus
+            />
             <ScrollView style={styles.locationOptions}>
+              {menu === 'village' && search.trim() && !choices.some((choice) => choice.toLowerCase() === search.trim().toLowerCase()) ? (
+                <TouchableOpacity style={styles.locationOption} onPress={() => {
+                  onVillageChange(search.trim());
+                  setMenu(null);
+                }}>
+                  <Text style={styles.locationOptionText}>Use “{search.trim()}”</Text>
+                </TouchableOpacity>
+              ) : null}
               {choices.map((choice) => (
                 <TouchableOpacity key={choice} style={styles.locationOption} onPress={() => {
                   if (menu === 'district') {
@@ -430,8 +471,9 @@ const normalizeImageUrl = (value: any, fallback: string) => {
   try {
     const parsed = new URL(raw);
     if ((parsed.hostname === '127.0.0.1' || parsed.hostname === 'localhost') && Platform.OS === 'android') {
-      parsed.hostname = '10.0.2.2';
-      return parsed.toString();
+      const rewritten = new URL(parsed.toString());
+      (rewritten as any).hostname = '10.0.2.2';
+      return rewritten.toString();
     }
     return parsed.toString();
   } catch {
@@ -592,7 +634,7 @@ const retryFetch = async (
       lastError = error as Error;
       if (i < maxRetries) {
         const delayMs = baseDelayMs * Math.pow(2, i);
-        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        await new Promise<void>((resolve) => setTimeout(() => resolve(), delayMs));
       }
     }
   }
@@ -861,6 +903,8 @@ export default function App() {
   const [newAddressPhone, setNewAddressPhone] = useState('');
   const [editingAddressId, setEditingAddressId] = useState<string | null>(null);
   const [editingAddressLabel, setEditingAddressLabel] = useState('');
+  const [editingAddressDistrict, setEditingAddressDistrict] = useState('');
+  const [editingAddressVillage, setEditingAddressVillage] = useState('');
   const [editingAddressPhone, setEditingAddressPhone] = useState('');
   const [appNotifications, setAppNotifications] = useState<any[]>([]);
   const ordersRequestRef = useRef<string | null>(null);
@@ -882,22 +926,37 @@ export default function App() {
   const startEditAddress = (entry: any) => {
     setEditingAddressId(String(entry.id));
     setEditingAddressLabel(entry.label || '');
+    setEditingAddressDistrict(entry.district || '');
+    setEditingAddressVillage(entry.village || '');
     setEditingAddressPhone(entry.phone || '');
   };
 
   const cancelEditAddress = () => {
     setEditingAddressId(null);
     setEditingAddressLabel('');
+    setEditingAddressDistrict('');
+    setEditingAddressVillage('');
     setEditingAddressPhone('');
   };
 
   const saveEditedAddress = async (addressId: any) => {
     const addrId = addressId;
+    if (!editingAddressDistrict || !editingAddressVillage) {
+      Alert.alert('Delivery location required', 'Choose both a district and village or area.');
+      return;
+    }
+    const updatedAddress = formatDeliveryLocation(editingAddressDistrict, editingAddressVillage);
     // Update locally first
-    setSavedAddresses((prev) => prev.map((a: any) => (String(a.id) === String(addrId) ? { ...a, label: editingAddressLabel || a.label, phone: editingAddressPhone || a.phone } : a)));
+    setSavedAddresses((prev) => prev.map((a: any) => (String(a.id) === String(addrId) ? {
+      ...a,
+      label: editingAddressLabel.trim() || a.label,
+      district: editingAddressDistrict,
+      village: editingAddressVillage,
+      address: updatedAddress,
+      phone: editingAddressPhone.trim(),
+    } : a)));
     if (String(selectedAddressId) === String(addrId)) {
-      // If currently selected, update deliveryAddress display
-      setDeliveryAddress((prev) => prev);
+      setDeliveryAddress(updatedAddress);
     }
     // Persist to server
     if (!authToken) {
@@ -905,7 +964,13 @@ export default function App() {
       return;
     }
     try {
-      const payload: any = { label: editingAddressLabel || undefined, phone_number: editingAddressPhone || undefined };
+      const payload: any = {
+        label: editingAddressLabel.trim() || undefined,
+        district: editingAddressDistrict,
+        village: editingAddressVillage,
+        address: updatedAddress,
+        phone: editingAddressPhone.trim(),
+      };
       // Try PATCH to addresses endpoint
       let res = await requestJson(`/api/addresses/${addrId}/`, { method: 'PATCH', body: JSON.stringify(payload) }, authToken);
       if (res && res.ok) {
@@ -914,7 +979,7 @@ export default function App() {
         return;
       }
       // Fallback: patch profile if single address model
-      res = await requestJson('/api/profile/', { method: 'PATCH', body: JSON.stringify({ phone_number: editingAddressPhone, address: editingAddressLabel }) }, authToken);
+      res = await requestJson('/api/profile/', { method: 'PATCH', body: JSON.stringify({ phone_number: editingAddressPhone, address: updatedAddress, district: editingAddressDistrict, village: editingAddressVillage }) }, authToken);
       if (res && res.ok) {
         await refreshProfile();
       }
@@ -974,14 +1039,14 @@ export default function App() {
           district: addressEntry.district,
           village: addressEntry.village,
         };
-        if (addressEntry.phone) payload.phone_number = addressEntry.phone;
+        if (addressEntry.phone) payload.phone = addressEntry.phone;
         console.log('[CART] saving new address to server', payload);
         // Try POST to addresses collection
         let res = await requestJson('/api/addresses/', { method: 'POST', body: JSON.stringify(payload) }, authToken);
         if (res && res.ok) {
           const serverAddr = res.data;
           // Ensure server address appears in savedAddresses
-          setSavedAddresses((prev) => [serverAddr, ...prev.filter((a: any) => String(a.id) !== String(serverAddr.id))].slice(0, 5));
+          setSavedAddresses((prev) => [serverAddr, ...prev.filter((a: any) => String(a.id) !== String(addressEntry.id))].slice(0, 5));
           setSelectedAddressId(String(serverAddr.id));
           await refreshProfile();
           Alert.alert('Address saved', 'Your new address has been saved to your account and selected for delivery.');
@@ -1006,11 +1071,17 @@ export default function App() {
   };
 
   const deleteAddress = async (addressId: any) => {
+    const remainingAddresses = savedAddresses.filter((entry: any) => String(entry.id) !== String(addressId));
+    const replacement = remainingAddresses.find((entry: any) => entry.isDefault) || remainingAddresses[0];
     // Remove locally first for snappy UI
-    setSavedAddresses((prev) => prev.filter((a: any) => String(a.id) !== String(addressId)));
+    setSavedAddresses(remainingAddresses);
     if (String(selectedAddressId) === String(addressId)) {
-      setSelectedAddressId(null);
-      setDeliveryAddress('');
+      if (replacement) {
+        selectAddress(replacement);
+      } else {
+        setSelectedAddressId(null);
+        setDeliveryAddress('');
+      }
     }
 
     if (!authToken) return;
@@ -1423,6 +1494,31 @@ export default function App() {
   useEffect(() => {
     if (!notificationEnabled) return undefined;
 
+    // Keep the app fully usable in Expo Go. Remote push support requires a
+    // development or production build that includes this app's credentials.
+    if (isRunningInExpoGo) {
+      console.info('[PUSH] Remote push notifications are unavailable in Expo Go.');
+      return undefined;
+    }
+
+    const Notifications = getNotificationsModule();
+    if (!Notifications) return undefined;
+
+    try {
+      Notifications.setNotificationHandler({
+        handleNotification: async () => ({
+          shouldShowAlert: true,
+          shouldShowBanner: true,
+          shouldShowList: true,
+          shouldPlaySound: false,
+          shouldSetBadge: false,
+        }),
+      });
+    } catch (error) {
+      console.warn('[PUSH] Unable to configure notifications.', error);
+      return undefined;
+    }
+
     const register = async () => {
       try {
         const existing = await AsyncStorage.getItem(PUSH_TOKEN_STORAGE_KEY);
@@ -1489,8 +1585,8 @@ export default function App() {
 
     return () => {
       try {
-        if (notificationListenerRef.current) Notifications.removeNotificationSubscription(notificationListenerRef.current);
-        if (responseListenerRef.current) Notifications.removeNotificationSubscription(responseListenerRef.current);
+        if (notificationListenerRef.current) notificationListenerRef.current.remove();
+        if (responseListenerRef.current) responseListenerRef.current.remove();
       } catch (e) {
         // ignore
       }
@@ -1640,11 +1736,16 @@ export default function App() {
       setCheckoutNotice({ type: 'error', message: 'Choose a district and village or area before retrying your order.' });
       return;
     }
+    const retryPhone = String(selectedAddress.phone || profile?.phone_number || '').trim();
+    if (!retryPhone) {
+      setCheckoutNotice({ type: 'error', message: 'Add a contact phone number to your delivery address before retrying.' });
+      return;
+    }
     try {
       const payload = {
         district: selectedAddress.district,
         village: selectedAddress.village,
-        phone_number: profile?.phone_number || '',
+        phone_number: retryPhone,
         payment_method: mapPaymentMethodToApiValue(localOrder.payment_method || paymentMethod || ''),
         notes: localOrder.notes || '',
       };
@@ -2002,28 +2103,12 @@ export default function App() {
     return true;
   };
 
-  // Prompt user to sign in or continue as guest before confirming checkout.
+  // Orders are only confirmed after the signed-in customer's cart has been
+  // accepted by the server; guests are directed to sign in first.
   const confirmCheckoutAuth = async (): Promise<boolean> => {
     if (isAuthenticated) return true;
-    return new Promise((resolve) => {
-      Alert.alert(
-        'Continue as guest?',
-        'You can sign in to complete checkout now, or continue as a guest and confirm locally.',
-        [
-          { text: 'Sign in', onPress: () => {
-            setProfileAuthMode('login');
-            setProfileAuthError(null);
-            setPostLoginRoute('checkout');
-            setActiveTab('Profile');
-            setProfileRoute('login');
-            resolve(false);
-          } },
-          { text: 'Continue as guest', onPress: () => resolve(true), style: 'default' },
-          { text: 'Cancel', onPress: () => resolve(false), style: 'cancel' },
-        ],
-        { cancelable: true },
-      );
-    });
+    requireAuthenticatedCheckout();
+    return false;
   };
 
   const requireAuthenticatedOrders = () => {
@@ -2228,13 +2313,10 @@ export default function App() {
     return (
       <View style={styles.categoryPage}>
         <View style={[styles.screenHeaderNavy, { paddingVertical: 18, minHeight: 84, borderBottomLeftRadius: 0, borderBottomRightRadius: 0 }]}>
-          <TouchableOpacity style={[styles.headerIconButton, { backgroundColor: 'transparent', borderWidth: 0, width: 36, height: 36 }]} onPress={() => setActiveTab('Home')}>
-            <Text style={styles.headerBackArrow}>{'<'}</Text>
-          </TouchableOpacity>
-          <Text style={[styles.headerTitle, { fontSize: 20, fontWeight: '800' }]}>{isBrandMode ? 'Brands' : 'Categories'}</Text>
           <TouchableOpacity style={[styles.sidebarToggleButton, { marginRight: 8 }]} onPress={() => setShowSidebar((s) => !s)} accessibilityRole="button">
             <Text style={styles.sidebarToggleText}>{showSidebar ? 'Hide' : 'Show'}</Text>
           </TouchableOpacity>
+          <Text style={[styles.headerTitle, { fontSize: 20, fontWeight: '800' }]}>{isBrandMode ? 'Brands' : 'Categories'}</Text>
           <TouchableOpacity style={[styles.headerIconButton, { backgroundColor: 'transparent', borderWidth: 0, width: 36, height: 36 }]} onPress={openCartScreen}>
             <Text style={styles.headerIconText}>🛒</Text>
             {cartCount > 0 ? <View style={styles.badge}><Text style={styles.badgeText}>{cartCount}</Text></View> : null}
@@ -2930,6 +3012,7 @@ export default function App() {
                 const hasValidQuantity = normalizedItems.every((item: any) => Number(item.quantity || 1) >= 1);
                 const selectedAddress = savedAddresses.find((entry: any) => String(entry.id) === String(selectedAddressId));
                 const trimmedAddress = formatDeliveryLocation(selectedAddress?.district || '', selectedAddress?.village || '');
+                const checkoutPhone = String(selectedAddress?.phone || profile?.phone_number || '').trim();
                 console.log('[CHECKOUT] selectedAddressId:', selectedAddressId, 'selectedAddress:', selectedAddress, 'savedAddresses:', savedAddresses);
                 const trimmedPayment = paymentMethod.trim();
 
@@ -2945,6 +3028,11 @@ export default function App() {
 
                 if (!selectedAddress || !trimmedAddress) {
                   setCheckoutNotice({ type: 'error', message: 'Please choose a district and village or area before confirming.' });
+                  return;
+                }
+
+                if (!checkoutPhone) {
+                  setCheckoutNotice({ type: 'error', message: 'Add a contact phone number to your delivery address before confirming.' });
                   return;
                 }
 
@@ -2986,7 +3074,7 @@ export default function App() {
                     const payload = {
                       district: selectedAddress.district,
                       village: selectedAddress.village,
-                      phone_number: profile?.phone_number || '',
+                      phone_number: checkoutPhone,
                       payment_method: mapPaymentMethodToApiValue(trimmedPayment),
                       notes: '',
                     };
@@ -3058,6 +3146,12 @@ export default function App() {
                           </TouchableOpacity>
                         </View>
                       </View>
+                      <DeliveryLocationSelector
+                        district={editingAddressDistrict}
+                        village={editingAddressVillage}
+                        onDistrictChange={setEditingAddressDistrict}
+                        onVillageChange={setEditingAddressVillage}
+                      />
                       <TextInput style={styles.inputField} value={editingAddressPhone} onChangeText={setEditingAddressPhone} placeholder="Phone number" placeholderTextColor="#9CA3AF" keyboardType="phone-pad" />
                     </>
                   ) : (
@@ -3097,6 +3191,7 @@ export default function App() {
                 placeholderTextColor="#9CA3AF"
               />
               <DeliveryLocationSelector district={newAddressDistrict} village={newAddressVillage} onDistrictChange={setNewAddressDistrict} onVillageChange={setNewAddressVillage} />
+              <Text style={styles.locationHint}>All Uganda districts are available. Search for a village or type its exact name.</Text>
               <TextInput
                 style={styles.inputField}
                 value={newAddressPhone}
@@ -3106,7 +3201,7 @@ export default function App() {
                 keyboardType="phone-pad"
               />
               <TouchableOpacity style={styles.primaryButton} onPress={saveNewAddress}>
-                <Text style={styles.primaryButtonText}>Save new address</Text>
+                <Text style={styles.primaryButtonText}>{savedAddresses.length >= 5 ? 'Address limit reached (5 of 5)' : `Save new address (${savedAddresses.length}/5)`}</Text>
               </TouchableOpacity>
             </View>
 
@@ -4449,7 +4544,6 @@ const styles = StyleSheet.create({
   headerTitle: { color: '#FFFFFF', fontSize: 18, fontWeight: '800' },
   searchBarCategories: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 16, marginTop: 12, marginBottom: 12, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 999, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB' },
   headerActionsRow: { flexDirection: 'row', alignItems: 'center' },
-  sidebarToggleButton: { marginLeft: 8, width: 40, height: 40, borderRadius: 8, backgroundColor: '#2563EB', justifyContent: 'center', alignItems: 'center' },
   categorySplitView: { flex: 1, flexDirection: 'row' },
   categorySidebar: { width: 110, flexGrow: 0, backgroundColor: '#FFFFFF', borderRightWidth: 1, borderRightColor: '#E2E8F0' },
   categorySidebarContent: { paddingVertical: 8 },
@@ -4535,6 +4629,7 @@ const styles = StyleSheet.create({
   locationModalOverlay: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.5)', justifyContent: 'center', padding: 24 },
   locationModalCard: { maxHeight: '75%', backgroundColor: '#FFFFFF', borderRadius: 20, padding: 18 },
   locationModalTitle: { color: '#0F172A', fontSize: 18, fontWeight: '800', marginBottom: 10, textTransform: 'capitalize' },
+  locationSearchInput: { borderWidth: 1, borderColor: '#DCE5F1', borderRadius: 12, paddingHorizontal: 12, paddingVertical: 11, color: '#0F172A', fontSize: 14, backgroundColor: '#F8FAFC', marginBottom: 8 },
   locationOptions: { maxHeight: 360 },
   locationOption: { paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#EEF2F7' },
   locationOptionText: { color: '#1B2A4A', fontSize: 15, fontWeight: '600' },
