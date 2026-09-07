@@ -39,20 +39,29 @@ export default function Receipts({ token }: ReceiptsProps) {
         const data = await fetchReceipts(token)
         if (!active) return
 
-        const normalizedReceipts = (data?.results ?? data ?? []).map((receipt: any) => ({
-          id: String(receipt.id ?? receipt.receipt_id ?? 'N/A'),
-          receiptNumber: receipt.receipt_number ?? receipt.receiptNumber ?? `${receipt.id ?? 'N/A'}`,
-          orderNumber: receipt.order_number ?? receipt.orderNumber ?? receipt.order_id ?? receipt.orderId ?? 'N/A',
-          customer: receipt.customer ?? receipt.customer_name ?? 'Guest',
-          amount: Number(receipt.amount ?? receipt.total_amount ?? 0),
-          date: formatReceiptDate(receipt.date ?? receipt.receipt_date ?? receipt.created_at ?? ''),
-          items: (receipt.items ?? []).map((item: any) => ({
-            product_name: item.product_name ?? item.name ?? 'Item',
-            quantity: Number(item.quantity ?? 0),
-            unit_price: Number(item.unit_price ?? item.price ?? 0),
-            subtotal: Number(item.subtotal ?? item.amount ?? 0),
-          })),
-        }))
+        const normalizedReceipts = (data?.results ?? data ?? []).map((receipt: any) => {
+          const customerName = receipt.customer_name ?? receipt.customer ?? 'Guest'
+          const salonName = receipt.salon_name ?? receipt.salonName ?? customerName
+          const address = receipt.delivery_address ?? receipt.address ?? ''
+
+          return {
+            id: String(receipt.id ?? receipt.receipt_id ?? 'N/A'),
+            receiptNumber: receipt.receipt_number ?? receipt.receiptNumber ?? `${receipt.id ?? 'N/A'}`,
+            orderNumber: receipt.order_number ?? receipt.orderNumber ?? receipt.order_id ?? receipt.orderId ?? 'N/A',
+            customer: salonName || customerName || 'Guest',
+            customerName,
+            salonName,
+            address,
+            amount: Number(receipt.amount ?? receipt.total_amount ?? 0),
+            date: formatReceiptDate(receipt.date ?? receipt.receipt_date ?? receipt.created_at ?? ''),
+            items: (receipt.items ?? []).map((item: any) => ({
+              product_name: item.product_name ?? item.name ?? 'Item',
+              quantity: Number(item.quantity ?? 0),
+              unit_price: Number(item.unit_price ?? item.price ?? 0),
+              subtotal: Number(item.subtotal ?? item.amount ?? 0),
+            })),
+          }
+        })
         setReceipts(normalizedReceipts)
       } catch (err) {
         if (active) setError(err instanceof Error ? err.message : 'Unable to load receipts.')

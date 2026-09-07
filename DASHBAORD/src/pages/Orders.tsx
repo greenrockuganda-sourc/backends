@@ -78,9 +78,17 @@ export default function Orders({ token }: OrdersProps) {
               }))
             : []
 
+          const customerName = order.customer_name ?? order.customer ?? 'Guest'
+          const salonName = order.salon_name ?? order.salonName ?? customerName
+          const deliveryAddress = order.delivery_address ?? order.address ?? ''
+
           return {
             id: String(order.order_id ?? order.id ?? 'N/A'),
-            customer: order.customer_name ?? order.customer ?? 'Guest',
+            customer: salonName || customerName || 'Guest',
+            customerName,
+            salonName,
+            deliveryAddress,
+            address: deliveryAddress,
             amount: Number(order.total_amount ?? order.amount ?? 0),
             status: String(order.order_status ?? order.status ?? 'pending').toLowerCase(),
             date: order.created_at?.slice(0, 10) ?? order.date ?? '',
@@ -123,7 +131,9 @@ export default function Orders({ token }: OrdersProps) {
       const term = searchTerm.toLowerCase()
       filtered = filtered.filter((order) =>
         order.id.toLowerCase().includes(term) ||
-        order.customer.toLowerCase().includes(term) ||
+        (order.customer ?? '').toLowerCase().includes(term) ||
+        (order.customerName ?? '').toLowerCase().includes(term) ||
+        (order.salonName ?? '').toLowerCase().includes(term) ||
         order.status.toLowerCase().includes(term)
       )
     }
@@ -248,9 +258,16 @@ export default function Orders({ token }: OrdersProps) {
         : []
 
       const selectedStatus = String(data?.order_status ?? 'Pending')
+      const customerName = data?.customer_name ?? data?.customer ?? 'Guest'
+      const salonName = data?.salon_name ?? data?.salonName ?? customerName
+      const deliveryAddress = data?.delivery_address ?? data?.address ?? ''
       setSelectedOrder({
         id: String(data.id ?? orderId),
-        customer: data.customer ?? 'Guest',
+        customer: salonName || customerName || 'Guest',
+        customerName,
+        salonName,
+        deliveryAddress,
+        address: deliveryAddress,
         amount: Number(data.total_amount ?? data.amount ?? 0),
         status: selectedStatus.toLowerCase(),
         date: data.created_at?.slice(0, 10) ?? data.date ?? '',

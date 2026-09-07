@@ -36,6 +36,10 @@ export interface Brand {
 export interface Order {
   id: string
   customer: string
+  customerName?: string
+  salonName?: string
+  deliveryAddress?: string
+  address?: string
   amount: number
   status: string
   date: string
@@ -51,6 +55,9 @@ export interface Delivery {
   id: string
   orderId: string
   driver: string
+  customer?: string
+  customerName?: string
+  salonName?: string
   address: string
   status: string
   receiptIssued: boolean
@@ -61,6 +68,9 @@ export interface Receipt {
   receiptNumber: string
   orderNumber: string
   customer: string
+  customerName?: string
+  salonName?: string
+  address?: string
   amount: number
   date: string
   items?: Array<{

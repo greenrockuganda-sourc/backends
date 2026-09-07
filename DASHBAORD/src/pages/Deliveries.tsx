@@ -27,14 +27,23 @@ export default function Deliveries({ token }: DeliveriesProps) {
           return
         }
 
-        const normalizedDeliveries = (data?.results ?? data ?? []).map((delivery: any) => ({
-          id: delivery.id ?? delivery.delivery_id ?? 'N/A',
-          orderId: delivery.order_number ?? delivery.orderId ?? 'N/A',
-          driver: delivery.delivery_person ?? delivery.driver_name ?? delivery.driver ?? 'Unassigned',
-          address: delivery.delivery_address ?? delivery.address ?? 'Address unavailable',
-          status: (delivery.delivery_status ?? delivery.status ?? 'preparing').toLowerCase(),
-          receiptIssued: Boolean(delivery.receipt_issued ?? delivery.receiptIssued ?? false),
-        }))
+        const normalizedDeliveries = (data?.results ?? data ?? []).map((delivery: any) => {
+          const customerName = delivery.customer_name ?? delivery.customer ?? 'Guest'
+          const salonName = delivery.salon_name ?? delivery.salonName ?? customerName
+          const address = delivery.delivery_address ?? delivery.address ?? delivery.location ?? 'Address unavailable'
+
+          return {
+            id: delivery.id ?? delivery.delivery_id ?? 'N/A',
+            orderId: delivery.order_number ?? delivery.orderId ?? 'N/A',
+            driver: delivery.delivery_person ?? delivery.driver_name ?? delivery.driver ?? 'Unassigned',
+            customer: salonName || customerName || 'Guest',
+            customerName,
+            salonName,
+            address,
+            status: (delivery.delivery_status ?? delivery.status ?? 'preparing').toLowerCase(),
+            receiptIssued: Boolean(delivery.receipt_issued ?? delivery.receiptIssued ?? false),
+          }
+        })
         setDeliveries(normalizedDeliveries)
       } catch (err) {
         if (active) {
@@ -189,6 +198,7 @@ export default function Deliveries({ token }: DeliveriesProps) {
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Delivery ID</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Order ID</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Salon</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Driver</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Address</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Status</th>
@@ -199,15 +209,15 @@ export default function Deliveries({ token }: DeliveriesProps) {
             <tbody className="divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  <td colSpan={7}>
+                  <td colSpan={8}>
                     <div className="px-4">
-                      <SkeletonTable rows={5} columns={7} />
+                      <SkeletonTable rows={5} columns={8} />
                     </div>
                   </td>
                 </tr>
               ) : !loading && deliveries.length === 0 ? (
                 <tr>
-                  <td colSpan={7}>
+                  <td colSpan={8}>
                     <div className="flex flex-col items-center justify-center px-4 py-12">
                       <PackageOpen size={48} className="text-gray-400 mb-3" />
                       <p className="text-sm font-medium text-gray-900">No deliveries yet</p>
@@ -220,6 +230,7 @@ export default function Deliveries({ token }: DeliveriesProps) {
                   <tr key={delivery.id} className="hover:bg-gray-50 transition-colors">
                     <td data-label="Delivery ID" className="px-6 py-4 text-sm font-medium text-blue-600">{delivery.id}</td>
                     <td data-label="Order ID" className="px-6 py-4 text-sm text-gray-900">{delivery.orderId}</td>
+                    <td data-label="Salon" className="px-6 py-4 text-sm text-gray-900">{delivery.salonName || delivery.customer || 'Guest'}</td>
                     <td data-label="Driver" className="px-6 py-4 text-sm text-gray-900">{delivery.driver}</td>
                     <td data-label="Address" className="px-6 py-4 text-sm text-gray-600">
                       <span className="flex items-center gap-1">
