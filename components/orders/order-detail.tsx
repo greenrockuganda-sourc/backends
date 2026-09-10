@@ -2,9 +2,10 @@
 
 import { Order } from '@/lib/types'
 import { Button } from '@/components/ui/button'
-import { X } from 'lucide-react'
+import { X, FileText } from 'lucide-react'
 import { ordersApi } from '@/lib/api'
 import { useState } from 'react'
+import { ReceiptTemplate } from '@/components/receipts/receipt-template'
 
 interface OrderDetailProps {
   order: Order
@@ -13,6 +14,7 @@ interface OrderDetailProps {
 
 export function OrderDetail({ order, onClose }: OrderDetailProps) {
   const [status, setStatus] = useState(order.status)
+  const [showReceipt, setShowReceipt] = useState(false)
   const [loading, setLoading] = useState(false)
 
   const handleStatusChange = async (newStatus: Order['status']) => {
@@ -27,6 +29,23 @@ export function OrderDetail({ order, onClose }: OrderDetailProps) {
     }
   }
 
+  const mockReceipt = {
+    id: order.id,
+    receiptNumber: `REC-${order.orderNumber}`,
+    orderId: order.id,
+    customerId: order.customerId,
+    customerName: order.customerName,
+    customerEmail: order.customerEmail,
+    customerPhone: order.customerPhone,
+    items: order.items,
+    subtotal: order.subtotal,
+    tax: order.tax,
+    shipping: order.shipping,
+    total: order.total,
+    paymentMethod: 'Credit Card',
+    issuedAt: new Date().toISOString(),
+  }
+
   return (
     <>
       <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4">
@@ -39,7 +58,6 @@ export function OrderDetail({ order, onClose }: OrderDetailProps) {
           </div>
 
           <div className="p-6 space-y-6">
-            {/* Customer Info */}
             <div>
               <h3 className="font-semibold text-foreground mb-3">Customer</h3>
               <div className="bg-muted/50 rounded-lg p-4">
@@ -50,7 +68,6 @@ export function OrderDetail({ order, onClose }: OrderDetailProps) {
               </div>
             </div>
 
-            {/* Items */}
             <div>
               <h3 className="font-semibold text-foreground mb-3">Items</h3>
               <div className="border border-border rounded-lg overflow-hidden">
@@ -77,7 +94,6 @@ export function OrderDetail({ order, onClose }: OrderDetailProps) {
               </div>
             </div>
 
-            {/* Totals */}
             <div className="flex justify-end">
               <div className="w-64">
                 <div className="flex justify-between mb-2 pb-2 border-b border-border">
@@ -99,7 +115,6 @@ export function OrderDetail({ order, onClose }: OrderDetailProps) {
               </div>
             </div>
 
-            {/* Status Update */}
             <div>
               <h3 className="font-semibold text-foreground mb-3">Order Status</h3>
               <div className="flex flex-wrap gap-2">
@@ -117,7 +132,6 @@ export function OrderDetail({ order, onClose }: OrderDetailProps) {
               </div>
             </div>
 
-            {/* Actions */}
             <div className="flex gap-3 pt-4 border-t border-border">
               <Button
                 variant="outline"
@@ -126,10 +140,24 @@ export function OrderDetail({ order, onClose }: OrderDetailProps) {
               >
                 Close
               </Button>
+              <Button
+                onClick={() => setShowReceipt(true)}
+                className="flex-1 gap-2"
+              >
+                <FileText className="h-4 w-4" />
+                Issue Receipt
+              </Button>
             </div>
           </div>
         </div>
       </div>
+
+      {showReceipt && (
+        <ReceiptTemplate
+          receipt={mockReceipt as any}
+          onClose={() => setShowReceipt(false)}
+        />
+      )}
     </>
   )
 }
