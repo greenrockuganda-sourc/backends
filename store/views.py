@@ -4,6 +4,7 @@ import io
 import logging
 import os
 import re
+import socket
 from decimal import Decimal
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -72,6 +73,14 @@ from .serializers import (
 )
 
 User = get_user_model()
+
+logger = logging.getLogger(__name__)
+
+# Guard against slow/unreachable SMTP or other socket-based services (e.g. Brevo
+# relay) blocking a request indefinitely and crashing the gunicorn worker on
+# timeout. This applies a global default timeout to all sockets opened by the
+# process (SMTP, HTTP, etc.) unless explicitly overridden.
+socket.setdefaulttimeout(5)
 
 cloudinary_cloud_name = (os.getenv('CLOUDINARY_CLOUD_NAME') or '').strip()
 cloudinary_api_key = (os.getenv('CLOUDINARY_API_KEY') or '').strip()
@@ -476,6 +485,30 @@ def _build_order_status_message(order, status):
     return subject, message
 
 
+def _send_email_safely(email, *, context_label='email'):
+    """Send an EmailMessage without letting SMTP/socket issues block the request.
+
+    Brevo (and other SMTP relays) can occasionally hang on socket.connect()
+    if the host is unreachable or the network is degraded. A module-level
+    socket.setdefaulttimeout() is set to bound how long any socket operation
+    can take, and this wrapper ensures any exception (connection refused,
+    timeout, auth failure, etc.) is caught, logged with detail, and does not
+    propagate up to the calling view.
+    """
+    try:
+        email.send(fail_silently=False)
+        return True
+    except (socket.timeout, TimeoutError) as exc:
+        logger.error('SMTP send timed out while sending %s: %s', context_label, exc)
+        return False
+    except (socket.gaierror, ConnectionRefusedError, OSError) as exc:
+        logger.error('SMTP connection error while sending %s: %s', context_label, exc)
+        return False
+    except Exception as exc:
+        logger.exception('Failed to send %s: %s', context_label, exc)
+        return False
+
+
 def _send_order_status_email(order, subject, message):
     customer_user = getattr(getattr(order, 'customer', None), 'user', None)
     to_email = getattr(customer_user, 'email', None)
@@ -672,13 +705,9 @@ def _send_order_status_email(order, subject, message):
     </html>
     """
 
-    try:
-        email = EmailMessage(subject=subject, body=html_content, to=[to_email])
-        email.content_subtype = 'html'
-        email.send(fail_silently=False)
-        return True
-    except Exception:
-        return False
+    email = EmailMessage(subject=subject, body=html_content, to=[to_email])
+    email.content_subtype = 'html'
+    return _send_email_safely(email, context_label=f'order {getattr(order, "order_number", "unknown")} status email')
 
 
 def _send_sms_to_phone(phone_number, message, *, context_label='contact'):
@@ -736,13 +765,9 @@ def _send_email_to_user(user, subject, message):
     </html>
     """
 
-    try:
-        email_message = EmailMessage(subject=subject, body=html_content, to=[email])
-        email_message.content_subtype = 'html'
-        email_message.send(fail_silently=False)
-        return True
-    except Exception:
-        return False
+    email_message = EmailMessage(subject=subject, body=html_content, to=[email])
+    email_message.content_subtype = 'html'
+    return _send_email_safely(email_message, context_label=f'user {getattr(user, "email", "unknown")} notification email')
 
 
 def _notify_user_contact(user, subject, message):
