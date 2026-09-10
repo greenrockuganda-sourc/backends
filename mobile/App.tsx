@@ -450,7 +450,6 @@ const normalizeOrdersPayload = (payload: any) => {
       order?.salon_name
       || order?.salonName
       || order?.business_name
-      || order?.business_name
       || order?.seller_name
       || order?.shop_name
       || customer?.salon_name

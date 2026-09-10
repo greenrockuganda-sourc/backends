@@ -1874,15 +1874,21 @@ class AdminDeliveryListAPIView(APIView):
         deliveries = Delivery.objects.select_related('order', 'order__customer__user').all().order_by('-created_at')
         data = []
         for delivery in deliveries:
-            # map backend fields to dashboard frontend expectations
             order = getattr(delivery, 'order', None)
+            customer_name = ''
+            salon_name = ''
+            address = ''
+            if order:
+                customer_name = f"{order.customer.user.first_name} {order.customer.user.last_name}".strip() or order.customer.user.email
+                salon_name = order.customer.salon_name or ''
+                address = order.delivery_address or order.customer.address or ''
+
             receipt_exists = False
             try:
                 receipt_exists = Receipt.objects.filter(order=order).exists()
             except Exception:
                 receipt_exists = False
 
-            # normalize status to frontend keys
             status_map = {
                 'Preparing': 'pending',
                 'Pending': 'pending',
@@ -1898,9 +1904,14 @@ class AdminDeliveryListAPIView(APIView):
                 'id': str(delivery.id),
                 'orderId': str(order.id) if order else None,
                 'orderNumber': order.order_number if order else None,
+                'customer': customer_name,
+                'customer_name': customer_name,
+                'salon_name': salon_name,
                 'deliveryPersonName': delivery.delivery_person,
                 'deliveryPersonPhone': delivery.delivery_phone,
-                'location': delivery.order.delivery_address if delivery.order else None,
+                'location': address,
+                'address': address,
+                'delivery_address': address,
                 'estimatedDeliveryTime': delivery.estimated_delivery_time.isoformat() if getattr(delivery, 'estimated_delivery_time', None) else None,
                 'status': normalized_status,
                 'receiptIssued': bool(receipt_exists),
@@ -2023,6 +2034,8 @@ class AdminReceiptListAPIView(APIView):
         data = []
         for receipt in receipts:
             order = receipt.order
+            customer_name = (order.customer.user.get_full_name() or order.customer.user.email) if order and getattr(order, 'customer', None) else 'Guest'
+            address = (order.delivery_address or getattr(order.customer, 'address', '') or '') if order and getattr(order, 'customer', None) else ''
             order_items = order.items.select_related('product').all() if order else []
             item_rows = [
                 {
@@ -2036,7 +2049,11 @@ class AdminReceiptListAPIView(APIView):
             data.append({
                 'id': receipt.id,
                 'receipt_number': receipt.receipt_number,
-                'customer': order.customer.user.get_full_name() or order.customer.user.email if order and getattr(order, 'customer', None) else 'Guest',
+                'customer': customer_name,
+                'customer_name': customer_name,
+                'salon_name': getattr(getattr(order, 'customer', None), 'salon_name', '') if order and getattr(order, 'customer', None) else '',
+                'address': address,
+                'delivery_address': address,
                 'order_number': order.order_number if order else 'N/A',
                 'amount': float(receipt.total_amount or Decimal('0.00')),
                 'date': (receipt.receipt_date or receipt.created_at).isoformat() if (receipt.receipt_date or receipt.created_at) else '',
@@ -2699,12 +2716,17 @@ class AdminOrderListAPIView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
-        orders = Order.objects.all().order_by('-created_at')
+        orders = Order.objects.select_related('customer__user').all().order_by('-created_at')
         data = []
         for order in orders:
+            customer_name = f"{order.customer.user.first_name} {order.customer.user.last_name}".strip() or order.customer.user.email
             data.append({
                 'id': order.id,
-                'customer': f"{order.customer.user.first_name} {order.customer.user.last_name}".strip() or order.customer.user.email,
+                'customer': customer_name,
+                'customer_name': customer_name,
+                'salon_name': order.customer.salon_name or '',
+                'address': order.delivery_address or order.customer.address or '',
+                'delivery_address': order.delivery_address or order.customer.address or '',
                 'order_number': order.order_number,
                 'total_amount': float(order.total_amount),
                 'payment_status': order.payment_status,
