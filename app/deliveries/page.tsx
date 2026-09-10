@@ -7,7 +7,7 @@ import { deliveriesApi } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Badge } from '@/components/ui/badge'
-import { Plus, CheckCircle2 } from 'lucide-react'
+import { Plus } from 'lucide-react'
 import { DeliveryForm } from '@/components/deliveries/delivery-form'
 
 const statusConfig = {
@@ -35,17 +35,6 @@ export default function DeliveriesPage() {
       console.error('Failed to fetch deliveries:', err)
     } finally {
       setLoading(false)
-    }
-  }
-
-  const handleIssueReceipt = async (id: string) => {
-    try {
-      const receipt = await deliveriesApi.issueReceipt(id)
-      setDeliveries(deliveries.map(d => d.id === id ? { ...d, receiptIssued: true } : d))
-      alert('Receipt issued successfully!')
-    } catch (err) {
-      console.error('Failed to issue receipt:', err)
-      alert('Failed to issue receipt')
     }
   }
 
@@ -90,7 +79,6 @@ export default function DeliveriesPage() {
                     <th className="px-6 py-3 text-left font-semibold">Person</th>
                     <th className="px-6 py-3 text-left font-semibold">Location</th>
                     <th className="px-6 py-3 text-center font-semibold">Status</th>
-                    <th className="px-6 py-3 text-center font-semibold">Receipt</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
@@ -110,16 +98,6 @@ export default function DeliveriesPage() {
                           <Badge className={`${statusInfo.bg} ${statusInfo.text}`}>
                             {statusInfo.label}
                           </Badge>
-                        </td>
-                        <td className="px-6 py-4 text-center">
-                          {delivery.receiptIssued ? (
-                            <div className="flex items-center justify-center gap-1 text-success">
-                              <CheckCircle2 className="h-4 w-4" />
-                              <span className="text-xs">Issued</span>
-                            </div>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">Pending</span>
-                          )}
                         </td>
                       </tr>
                     )

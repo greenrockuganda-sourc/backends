@@ -8,7 +8,6 @@ import {
   Package,
   ShoppingCart,
   Truck,
-  FileText,
   Settings,
   X,
 } from 'lucide-react'
@@ -21,7 +20,6 @@ const menuItems = [
   { icon: ShoppingCart, label: 'Inventory', href: '/inventory' },
   { icon: ShoppingCart, label: 'Orders', href: '/orders' },
   { icon: Truck, label: 'Deliveries', href: '/deliveries' },
-  { icon: FileText, label: 'Receipts', href: '/receipts' },
   { icon: Settings, label: 'Settings', href: '/settings' },
 ]
 

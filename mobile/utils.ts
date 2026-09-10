@@ -49,5 +49,5 @@ export const getOrderImageUrls = (order: any): string[] => {
   });
 
   const normalized = deduped.slice(0, 3);
-  return normalized.length ? normalized : [DEFAULT_PRODUCT_IMAGE];
+  return normalized.length ? normalized : [];
 };

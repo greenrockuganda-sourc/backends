@@ -21,12 +21,10 @@ import {
   useWindowDimensions,
   View,
   BackHandler,
-  Switch,
   Linking,
 } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import type * as Notifications from 'expo-notifications';
-import { DEFAULT_PRODUCT_IMAGE, formatCurrency, getOrderImageUrls } from './utils';
+import { formatCurrency, getOrderImageUrls } from './utils';
 
 const getBackendCandidates = () => {
   const scriptURL = NativeModules.SourceCode?.scriptURL as string | undefined;
@@ -57,7 +55,8 @@ const getBackendCandidates = () => {
 };
 
 const getRailwayApiBaseUrl = (): string | null => {
-  const extras = (Constants.expoConfig?.extra ?? Constants.manifest?.extra) as Record<string, unknown> | undefined;
+  const manifestExtra = (Constants as any).expoConfig?.extra ?? (Constants as any).manifest?.extra ?? (Constants as any).manifest2?.extra;
+  const extras = manifestExtra as Record<string, unknown> | undefined;
   const raw = extras?.apiBaseUrl || process.env.EXPO_PUBLIC_API_BASE_URL || process.env.API_BASE_URL;
   if (typeof raw !== 'string') {
     return null;
@@ -75,33 +74,57 @@ const API_BASE_URLS = [
 const buildUrl = (path: string, baseUrl?: string) => `${baseUrl || API_BASE_URLS[0] || 'http://127.0.0.1:8000'}${path}`;
 const CART_STORAGE_KEY = '@glow-cart-v1';
 const AUTH_TOKEN_STORAGE_KEY = '@glow-auth-token-v1';
-const NOTIFICATION_PREFERENCE_STORAGE_KEY = '@glow-notification-preference-v1';
+const PRODUCTS_STORAGE_KEY = '@glow-products-v1';
 const DISCOVER_MORE_PRODUCT_LIMIT = 100;
-const CATALOG_IMAGE_FALLBACK = { uri: DEFAULT_PRODUCT_IMAGE };
+// No stock fallback image: show a neutral placeholder when backend image missing.
 const SPLASH_LOGO_URL = 'https://res.cloudinary.com/h78tlu47/image/upload/v1784708343/icon_sotujz.jpg';
+
+const matchesProductSearch = (product: any, query: string) => {
+  const normalizedQuery = (query || '').trim().toLowerCase();
+  if (!normalizedQuery) return true;
+
+  const searchableText = [
+    product?.product_name,
+    product?.name,
+    product?.description,
+    product?.category_name,
+    product?.category?.category_name,
+    product?.brand_name,
+    product?.brand?.brand_name,
+    product?.sku,
+    product?.tags,
+    product?.short_description,
+  ]
+    .filter((value) => typeof value === 'string' && value.trim())
+    .join(' ')
+    .toLowerCase();
+
+  return searchableText.includes(normalizedQuery);
+};
+
+const matchesOrderSearch = (order: any, query: string) => {
+  const normalizedQuery = (query || '').trim().toLowerCase();
+  if (!normalizedQuery) return true;
+
+  const searchableText = [
+    order?.order_number,
+    order?.salon_name,
+    order?.business_name,
+    order?.customer_name,
+    order?.customer?.full_name,
+    order?.delivery_address,
+    order?.address,
+    order?.shipping_address,
+    order?.location,
+  ]
+    .filter((value) => typeof value === 'string' && value.trim())
+    .join(' ')
+    .toLowerCase();
+
+  return searchableText.includes(normalizedQuery) || String(order?.order_number || '').toLowerCase().includes(normalizedQuery);
+};
 const SPLASH_DELIVERY_IMAGE_URL = 'https://res.cloudinary.com/h78tlu47/image/upload/v1784708354/glow-logo-navy-bg_tzzdwd.jpg';
 const SIDEBAR_PERSIST_KEY = '@glow-show-sidebar-v1';
-const PUSH_TOKEN_STORAGE_KEY = '@glow-expo-push-token-v1';
-// Expo Go cannot register for remote push notifications from SDK 53 onward.
-// `appOwnership` is `expo` only when this bundle is running in Expo Go.
-const isRunningInExpoGo = Constants.appOwnership === 'expo';
-
-// expo-notifications creates native event emitters while its module is loading.
-// A development client built before the module was added does not contain those
-// native objects, which would otherwise prevent the whole app from starting.
-let notificationsModule: typeof Notifications | null | undefined;
-const getNotificationsModule = (): typeof Notifications | null => {
-  if (notificationsModule !== undefined) return notificationsModule;
-
-  try {
-    notificationsModule = require('expo-notifications') as typeof Notifications;
-  } catch (error) {
-    notificationsModule = null;
-    console.warn('[PUSH] Notifications are unavailable in this app build.', error);
-  }
-
-  return notificationsModule;
-};
 
 // Ensure React Native Image defaults to contain so images are shown in full
 try {
@@ -138,6 +161,75 @@ const DELIVERY_AREA_SUGGESTIONS: Record<string, string[]> = {
 };
 
 const formatDeliveryLocation = (district: string, village: string) => district && village ? `${village}, ${district}` : '';
+
+const parseDeliveryLocationParts = (value: string) => {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return { district: '', village: '' };
+
+  const segments = trimmed
+    .split(',')
+    .map((segment) => segment.trim())
+    .filter(Boolean);
+
+  if (segments.length >= 2) {
+    return {
+      village: segments[0],
+      district: segments[segments.length - 1],
+    };
+  }
+
+  return { district: segments[0] || '', village: '' };
+};
+
+const normalizeAddressEntry = (entry: any, fallbackIndex = 0, fallbackId = `addr-${fallbackIndex}`) => {
+  const rawAddress = entry?.address || entry?.line || entry?.location || entry?.street || '';
+  const parsedFromAddress = parseDeliveryLocationParts(rawAddress);
+  const district = entry?.district || entry?.region || parsedFromAddress.district || '';
+  const village = entry?.village || entry?.city || entry?.area || entry?.neighbourhood || parsedFromAddress.village || '';
+  const address = rawAddress || formatDeliveryLocation(district, village);
+  return {
+    id: entry?.id ?? entry?.address_id ?? entry?.pk ?? entry?._id ?? `addr-${fallbackId}`,
+    label: entry?.label || entry?.name || 'Address',
+    address,
+    district,
+    village,
+    phone: entry?.phone || entry?.phone_number || '',
+    isDefault: Boolean(entry?.is_default || entry?.default || fallbackIndex === 0),
+  };
+};
+
+const deriveSavedAddressesFromProfile = (profileData: any) => {
+  const serverAddresses = Array.isArray(profileData?.addresses)
+    ? profileData.addresses
+    : Array.isArray(profileData?.saved_addresses)
+      ? profileData.saved_addresses
+      : Array.isArray(profileData?.address_list)
+        ? profileData.address_list
+        : [];
+
+  if (Array.isArray(serverAddresses) && serverAddresses.length) {
+    return serverAddresses.map((entry: any, index: number) => normalizeAddressEntry(entry, index, `${index}`));
+  }
+
+  const directProfileAddress = profileData?.address || profileData?.delivery_address || profileData?.primary_address || profileData?.location || '';
+  const parsedFromAddress = parseDeliveryLocationParts(directProfileAddress);
+  const district = profileData?.district || profileData?.state || parsedFromAddress.district || '';
+  const village = profileData?.village || profileData?.city || profileData?.area || profileData?.neighbourhood || parsedFromAddress.village || '';
+
+  if (district || village || directProfileAddress) {
+    return [{
+      id: profileData?.id ? `profile-${profileData.id}` : `profile-${Date.now()}`,
+      label: 'Primary',
+      address: directProfileAddress || formatDeliveryLocation(district, village),
+      district,
+      village,
+      phone: profileData?.phone_number || profileData?.phone || '',
+      isDefault: true,
+    }];
+  }
+
+  return [];
+};
 
 const DeliveryLocationSelector = ({
   district,
@@ -217,14 +309,50 @@ const DeliveryLocationSelector = ({
 
 const CatalogImage = ({ uri, style }: { uri: string; style: any }) => {
   const [failedToLoad, setFailedToLoad] = useState(false);
+  const safeUri = typeof uri === 'string' && uri.trim() ? uri.trim() : '';
 
   useEffect(() => {
     setFailedToLoad(false);
   }, [uri]);
 
+  // Aggressively warm the native asset cache for visible images so they
+  // render faster when the user navigates to detail screens.
+  useEffect(() => {
+    if (!safeUri) return;
+    try {
+      if (globalPrefetchedImagesCache.has(safeUri)) return;
+    } catch (e) {
+      // ignore if cache not yet defined
+    }
+
+    (async () => {
+      try {
+        // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+        // @ts-ignore
+        await Asset.fromURI(safeUri).downloadAsync();
+        try {
+          globalPrefetchedImagesCache.add(safeUri);
+        } catch (e) {}
+      } catch (err) {
+        try {
+          await Image.prefetch(safeUri);
+          try {
+            globalPrefetchedImagesCache.add(safeUri);
+          } catch (e) {}
+        } catch (_) {
+          // ignore
+        }
+      }
+    })();
+  }, [safeUri]);
+
+  if (!safeUri || failedToLoad) {
+    return <View style={[style, styles.productPlaceholder]} />;
+  }
+
   return (
     <Image
-      source={failedToLoad ? CATALOG_IMAGE_FALLBACK : { uri }}
+      source={{ uri: safeUri }}
       style={style}
       resizeMode="contain"
       onError={() => setFailedToLoad(true)}
@@ -238,6 +366,8 @@ const OrderItemCard = React.memo(({ item, onView, onRetry }: { item: any; onView
   const orderImages = getOrderImageUrls(item);
   const visibleImages = orderImages.slice(0, 3);
   const itemCount = Array.isArray(item.items) ? item.items.length : Number(item.item_count || 0);
+  const salonName = item.salon_name || item.business_name || item.salonName || item.customer?.salon_name || item.customer?.business_name || 'Salon order';
+  const deliveryAddress = item.delivery_address || item.address || item.shipping_address || item.deliveryAddress || item.location || item.customer_address || 'Delivery address pending';
 
   return (
     <View style={styles.orderCard}>
@@ -245,6 +375,8 @@ const OrderItemCard = React.memo(({ item, onView, onRetry }: { item: any; onView
         <View style={styles.orderCardHeaderLeft}>
           <Text style={styles.orderNumber}>Order #{item.order_number || item.id}</Text>
           <Text style={styles.orderDate}>{orderDate}</Text>
+          <Text style={styles.orderDate}>{salonName}</Text>
+          <Text style={styles.orderDate}>{deliveryAddress}</Text>
         </View>
         <View style={[styles.statusBadge, getOrderStatusStyle(status)]}>
           <Text style={styles.statusBadgeText}>{status}</Text>
@@ -253,7 +385,7 @@ const OrderItemCard = React.memo(({ item, onView, onRetry }: { item: any; onView
 
       <View style={styles.thumbnailRow}>
         {visibleImages.length ? visibleImages.map((imageUrl, index) => (
-          <Image key={`${item.id}-${index}`} source={{ uri: imageUrl || DEFAULT_PRODUCT_IMAGE }} style={styles.thumbImage} />
+          <CatalogImage key={`${item.id}-${index}`} uri={imageUrl} style={styles.thumbImage} />
         )) : (
           <><View style={styles.thumbBox} /><View style={styles.thumbBox} /><View style={styles.thumbBox} /></>
         )}
@@ -289,12 +421,71 @@ const OrderItemCard = React.memo(({ item, onView, onRetry }: { item: any; onView
   );
 });
 
+const normalizeOrderValue = (value: any) => {
+  if (value === null || value === undefined || value === '') return '';
+  if (typeof value === 'string') return value.trim();
+  if (typeof value === 'object') {
+    const nested = value.name || value.title || value.label || value.salon_name || value.business_name || value.address || value.delivery_address || value.customer_name || '';
+    return typeof nested === 'string' ? nested.trim() : String(nested).trim();
+  }
+  return String(value).trim();
+};
+
 const normalizeOrdersPayload = (payload: any) => {
-  if (Array.isArray(payload)) return payload;
-  if (Array.isArray(payload?.results)) return payload.results;
-  if (Array.isArray(payload?.orders)) return payload.orders;
-  if (Array.isArray(payload?.data)) return payload.data;
-  return [];
+  const items = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.results)
+      ? payload.results
+      : Array.isArray(payload?.orders)
+        ? payload.orders
+        : Array.isArray(payload?.data)
+          ? payload.data
+          : [];
+
+  return items.map((order: any) => {
+    const normalizedOrder = { ...order };
+    const customer = order?.customer || {};
+    const user = order?.user || {};
+    const salonName = normalizeOrderValue(
+      order?.salon_name
+      || order?.salonName
+      || order?.business_name
+      || order?.business_name
+      || order?.seller_name
+      || order?.shop_name
+      || customer?.salon_name
+      || customer?.business_name
+      || customer?.shop_name
+      || user?.salon_name
+      || user?.business_name
+      || user?.shop_name
+      || order?.customer_name
+      || customer?.name
+      || user?.name
+      || user?.full_name
+    );
+    const deliveryAddress = normalizeOrderValue(
+      order?.delivery_address
+      || order?.deliveryAddress
+      || order?.shipping_address
+      || order?.address
+      || order?.customer_address
+      || order?.location
+      || customer?.address
+      || customer?.delivery_address
+      || customer?.location
+      || user?.address
+      || user?.delivery_address
+    );
+
+    normalizedOrder.salon_name = salonName;
+    normalizedOrder.business_name = salonName || normalizedOrder.business_name || '';
+    normalizedOrder.delivery_address = deliveryAddress;
+    normalizedOrder.address = deliveryAddress || normalizedOrder.address || '';
+    normalizedOrder.customer_name = normalizeOrderValue(order?.customer_name || customer?.name || user?.name || user?.full_name || normalizedOrder.customer_name);
+
+    return normalizedOrder;
+  });
 };
 
 const getCategoryTextValue = (value: any) => {
@@ -308,7 +499,7 @@ const getCategoryTextValue = (value: any) => {
   return String(value);
 };
 
-const deduplicateItems = <T extends Record<string, any>>(items: T[], getKey: (item: T) => string): T[] => {
+function deduplicateItems(items: any[], getKey: (item: any) => string): any[] {
   const seen = new Set<string>();
   return items.filter((item) => {
     const key = getKey(item);
@@ -318,7 +509,7 @@ const deduplicateItems = <T extends Record<string, any>>(items: T[], getKey: (it
     seen.add(key);
     return true;
   });
-};
+}
 
 const normalizeCategoriesPayload = (payload: any) => {
   const items = Array.isArray(payload) ? payload : [];
@@ -417,10 +608,28 @@ const getProductRelationIds = (product: any, relation: 'category' | 'brand') => 
     .map(String);
 };
 
+const getProductStockQuantity = (product: any) => {
+  const candidates = [
+    product?.quantity_in_stock,
+    product?.stock,
+    product?.available_quantity,
+    product?.stock_quantity,
+    product?.inventory_count,
+    product?.stock_count,
+    product?.available_stock,
+  ];
+
+  for (const candidate of candidates) {
+    const value = Number(candidate);
+    if (Number.isFinite(value)) return value;
+  }
+  return null;
+};
+
 const isProductOutOfStock = (product: any) => {
   const status = String(product?.status || '').trim().toLowerCase();
-  const quantity = Number(product?.quantity_in_stock);
-  return status === 'out of stock' || (Number.isFinite(quantity) && quantity <= 0);
+  const quantity = getProductStockQuantity(product);
+  return status === 'out of stock' || (quantity !== null && quantity <= 0);
 };
 
 const getApiErrorMessage = (data: any, fallback: string) => {
@@ -455,9 +664,16 @@ const productMatchesCatalogItem = (product: any, item: any, relation: 'category'
   );
 };
 
-const normalizeImageUrl = (value: any, fallback: string) => {
-  const raw = typeof value === 'string' ? value.trim() : '';
-  if (!raw) return fallback;
+const normalizeImageUrl = (value: any, fallback: string): string => {
+  if (value === null || value === undefined || value === false) return fallback;
+
+  if (typeof value === 'object') {
+    const nested = value.url || value.image_url || value.src || value.uri || value.href || value.path;
+    return nested ? normalizeImageUrl(nested, fallback) : fallback;
+  }
+
+  const raw = String(value).trim();
+  if (!raw || raw === 'null' || raw === 'undefined') return fallback;
 
   const safeBase = API_BASE_URLS[0] || 'http://127.0.0.1:8000';
   if (raw.startsWith('/')) {
@@ -481,8 +697,34 @@ const normalizeImageUrl = (value: any, fallback: string) => {
   }
 };
 
+const collectImageCandidates = (value: any): string[] => {
+  if (value === null || value === undefined || value === false) return [];
+  if (Array.isArray(value)) {
+    return value.flatMap((entry) => collectImageCandidates(entry));
+  }
+  if (typeof value === 'object') {
+    const nested = [
+      value.url,
+      value.image_url,
+      value.imageUrl,
+      value.src,
+      value.uri,
+      value.href,
+      value.path,
+      value.image,
+      value.product_image,
+    ];
+    return nested.flatMap((entry) => collectImageCandidates(entry));
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed ? [trimmed] : [];
+  }
+  return [];
+};
+
 const getProductImageUrls = (product: any): string[] => {
-  if (!product) return [DEFAULT_PRODUCT_IMAGE];
+  if (!product) return [];
 
   const values = [
     product.image_url,
@@ -491,13 +733,19 @@ const getProductImageUrls = (product: any): string[] => {
     product.image_url_4,
     product.image,
     product.product_image,
-    ...(Array.isArray(product.images) ? product.images.map((image: any) => image?.url || image?.image_url || image) : []),
-    ...(Array.isArray(product.image_urls) ? product.image_urls : []),
-  ];
+    product.productImage,
+    product.gallery,
+    product.images,
+    product.image_urls,
+    product.images_url,
+    product.photo,
+    product.photo_url,
+    product.thumbnail,
+    product.thumbnail_url,
+  ].flatMap((entry) => collectImageCandidates(entry));
 
   const seen = new Set<string>();
   const urls = values
-    .filter((value) => typeof value === 'string' && value.trim())
     .map((value) => normalizeImageUrl(value, ''))
     .filter((url) => Boolean(url) && !seen.has(url) && Boolean(seen.add(url)));
 
@@ -510,7 +758,7 @@ const getProductImageUrls = (product: any): string[] => {
   if (/(tool|clipper|scissor|barber|brush|comb)/.test(category)) {
     return ['https://images.unsplash.com/photo-1515377905703-c4788e51af15?auto=format&fit=crop&w=600&q=75'];
   }
-  return [DEFAULT_PRODUCT_IMAGE];
+  return [];
 };
 // Prefetch product image URLs with a concurrency limit. Uses expo-asset when available.
 // Use a module-level fallback cache when called before component initialization.
@@ -747,10 +995,10 @@ const fetchPublicCatalogProducts = async (token: string | null) => {
 
 const navItems = [
   { key: 'Home', label: 'Home', icon: '⌂' },
+  { key: 'Categories', label: 'Category', icon: '▦' },
   { key: 'Cart', label: 'Cart', icon: '🛒' },
   { key: 'Orders', label: 'Orders', icon: '▤' },
-  { key: 'Categories', label: 'Categories', icon: '▦' },
-  { key: 'Profile', label: 'Profile', icon: '♙' },
+  { key: 'Settings', label: 'Settings', icon: '⚙' },
 ];
 
 // Mirror backend ORDER_STATUS_CHOICES to avoid mismatches between UI and API
@@ -812,6 +1060,13 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Auto-clear transient error messages after a short delay so the UI doesn't
+  // remain stuck showing a stale error (e.g., stock sync failures).
+  useEffect(() => {
+    if (!error) return undefined;
+    const id = setTimeout(() => setError(null), 5000);
+    return () => clearTimeout(id);
+  }, [error]);
   const [activeTab, setActiveTab] = useState('Home');
   const [heroImageFallback, setHeroImageFallback] = useState(false);
   useEffect(() => {
@@ -824,6 +1079,8 @@ export default function App() {
   const [selectedBrand, setSelectedBrand] = useState('All Brands');
   const [selectedBrandId, setSelectedBrandId] = useState<string | null>(null);
   const [categorySortMode, setCategorySortMode] = useState<'featured' | 'price' | 'name'>('featured');
+  const [categoryFilterMode, setCategoryFilterMode] = useState<'all' | 'in_stock' | 'out_of_stock'>('all');
+  const [categoryFilterOpen, setCategoryFilterOpen] = useState(false);
   const [selectedOrderStatus, setSelectedOrderStatus] = useState('All');
   const [debouncedOrderStatus, setDebouncedOrderStatus] = useState('All');
   const [selectedOrderId, setSelectedOrderId] = useState<number | null>(null);
@@ -835,7 +1092,7 @@ export default function App() {
   const [ordersPage, setOrdersPage] = useState(1);
   const [ordersHasMore, setOrdersHasMore] = useState(true);
   const ordersEndReachedDuringMomentumRef = useRef(true);
-  const [profileRoute, setProfileRoute] = useState<'profile' | 'login' | 'settings' | 'personal_information' | 'change_password' | 'payment_methods' | 'addresses' | 'notification_settings' | 'help' | 'about' | 'cart' | 'checkout' | 'order_success' | 'security' | 'notifications' | 'favorites'>('profile');
+  const [profileRoute, setProfileRoute] = useState<'profile' | 'login' | 'settings' | 'personal_information' | 'change_password' | 'payment_methods' | 'addresses' | 'help' | 'about' | 'cart' | 'checkout' | 'order_success' | 'security' | 'favorites'>('profile');
   const [profilePhoto, setProfilePhoto] = useState<string | null>(null);
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [showSidebar, setShowSidebar] = useState(true);
@@ -843,8 +1100,6 @@ export default function App() {
   const [selectedProductImageIndex, setSelectedProductImageIndex] = useState(0);
   const [wishlist, setWishlist] = useState<any[]>([]);
   const [recentlyViewed, setRecentlyViewed] = useState<any[]>([]);
-  const [notificationEnabled, setNotificationEnabled] = useState(true);
-  const [notificationPreferenceHydrated, setNotificationPreferenceHydrated] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
@@ -852,6 +1107,9 @@ export default function App() {
   const [profileAuthMode, setProfileAuthMode] = useState<'login' | 'signup'>('login');
   const [profileAuthEmail, setProfileAuthEmail] = useState('');
   const [profileAuthPassword, setProfileAuthPassword] = useState('');
+  const [showProfilePassword, setShowProfilePassword] = useState(false);
+  const [showRecoveryPassword, setShowRecoveryPassword] = useState(false);
+  const [showRecoveryConfirmPassword, setShowRecoveryConfirmPassword] = useState(false);
   const [profileAuthFirstName, setProfileAuthFirstName] = useState('');
   const [profileAuthLastName, setProfileAuthLastName] = useState('');
   const [profileAuthPhone, setProfileAuthPhone] = useState('');
@@ -868,18 +1126,46 @@ export default function App() {
   const [recoveryPasswordConfirm, setRecoveryPasswordConfirm] = useState('');
   const [postLoginRoute, setPostLoginRoute] = useState<'profile' | 'checkout' | 'orders'>('profile');
   const prefetchedImagesRef = useRef<Set<string>>(new Set());
-  // Android hardware back button handling: close overlays or navigate to Home
+  const previousTabRef = useRef('Home');
+  const tabHistoryRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    if (activeTab !== previousTabRef.current) {
+      if (previousTabRef.current && activeTab !== previousTabRef.current) {
+        tabHistoryRef.current = [...tabHistoryRef.current, previousTabRef.current];
+        if (tabHistoryRef.current.length > 15) {
+          tabHistoryRef.current = tabHistoryRef.current.slice(-15);
+        }
+      }
+      previousTabRef.current = activeTab;
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (activeTab !== 'Home' && activeTab !== 'Categories') {
+      setSelectedProduct(null);
+    }
+  }, [activeTab]);
+
+  // Android hardware back button handling: go to the last viewed screen when available,
+  // otherwise keep the app on the current view instead of always forcing Home.
   useEffect(() => {
     const onBackPress = () => {
       if (selectedProduct) {
         setSelectedProduct(null);
         return true;
       }
+      const previousTab = tabHistoryRef.current[tabHistoryRef.current.length - 1];
+      if (previousTab) {
+        tabHistoryRef.current = tabHistoryRef.current.slice(0, -1);
+        setActiveTab(previousTab);
+        return true;
+      }
       if (activeTab !== 'Home') {
         setActiveTab('Home');
         return true;
       }
-      return false; // let OS handle (exit app)
+      return false;
     };
 
     const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
@@ -894,7 +1180,7 @@ export default function App() {
   const [paymentMethod, setPaymentMethod] = useState('Cash on delivery');
   const [savingPaymentMethod, setSavingPaymentMethod] = useState(false);
   const [addressRouteReturnTarget, setAddressRouteReturnTarget] = useState<'profile' | 'checkout'>('profile');
-  const [profileDraft, setProfileDraft] = useState({ first_name: '', last_name: '', email: '', phone_number: '' });
+  const [profileDraft, setProfileDraft] = useState({ first_name: '', last_name: '', email: '', phone_number: '', salon_name: '' });
   const [savedAddresses, setSavedAddresses] = useState<any[]>([]);
   const [selectedAddressId, setSelectedAddressId] = useState<string | null>(null);
   const [newAddressLabel, setNewAddressLabel] = useState('Home');
@@ -906,7 +1192,6 @@ export default function App() {
   const [editingAddressDistrict, setEditingAddressDistrict] = useState('');
   const [editingAddressVillage, setEditingAddressVillage] = useState('');
   const [editingAddressPhone, setEditingAddressPhone] = useState('');
-  const [appNotifications, setAppNotifications] = useState<any[]>([]);
   const ordersRequestRef = useRef<string | null>(null);
   const ordersFetchInFlightRef = useRef(false);
   const cartOpsRef = useRef<Record<string, boolean>>({});
@@ -990,13 +1275,42 @@ export default function App() {
     }
   };
 
-  const saveProfileDetails = () => {
+  const saveProfileDetails = async () => {
+    const salonName = (profileDraft.salon_name || profile?.salon_name || profile?.business_name || profile?.salonName || '').trim();
     const nextProfile = {
       ...(profile || {}),
       ...profileDraft,
-      email: profileDraft.email || profile?.email || '',
-      phone_number: profileDraft.phone_number || profile?.phone_number || '',
+      first_name: (profileDraft.first_name || '').trim(),
+      last_name: (profileDraft.last_name || '').trim(),
+      email: (profileDraft.email || profile?.email || '').trim(),
+      phone_number: (profileDraft.phone_number || profile?.phone_number || '').trim(),
+      salon_name: salonName,
+      business_name: salonName || profile?.business_name || '',
     };
+
+    if (authToken) {
+      try {
+        const payload = {
+          first_name: nextProfile.first_name,
+          last_name: nextProfile.last_name,
+          email: nextProfile.email,
+          phone_number: nextProfile.phone_number,
+          salon_name: salonName,
+          business_name: salonName,
+        };
+
+        const res = await requestJson('/api/profile/', { method: 'PATCH', body: JSON.stringify(payload) }, authToken);
+        if (!res || !res.ok) {
+          Alert.alert('Could not update profile', res?.data?.detail || res?.data?.error || 'Please try again.');
+          return;
+        }
+      } catch (err) {
+        console.warn('saveProfileDetails failed', err);
+        Alert.alert('Could not update profile', 'Please check your connection and try again.');
+        return;
+      }
+    }
+
     setProfile(nextProfile);
     setProfileRoute('profile');
     Alert.alert('Profile updated', 'Your account information has been saved.');
@@ -1052,9 +1366,13 @@ export default function App() {
           Alert.alert('Address saved', 'Your new address has been saved to your account and selected for delivery.');
           return;
         }
-        // Fallback: update profile with primary address fields
-        res = await requestJson('/api/profile/', { method: 'PATCH', body: JSON.stringify({ address: addressEntry.address, district: addressEntry.district, village: addressEntry.village, phone_number: addressEntry.phone }) }, authToken);
+        // Fallback: update profile with primary address fields. Some backends reject PATCH.
+        const fallbackPayload = { address: addressEntry.address, district: addressEntry.district, village: addressEntry.village, phone_number: addressEntry.phone };
+        res = await requestJson('/api/profile/', { method: 'PATCH', body: JSON.stringify(fallbackPayload) }, authToken);
         console.log('[CART] saveNewAddress fallback response:', res);
+        if (!res || !res.ok) {
+          console.warn('[CART] saveNewAddress profile update failed', res);
+        }
         if (res && res.ok) {
           await refreshProfile();
           Alert.alert('Address saved', 'Your new address has been saved to your account and selected for delivery.');
@@ -1101,7 +1419,9 @@ export default function App() {
   };
 
     const savePaymentMethod = async () => {
-      const apiValue = mapPaymentMethodToApiValue(paymentMethod);
+      const nextPaymentMethod = 'Cash on delivery';
+      setPaymentMethod(nextPaymentMethod);
+      const apiValue = mapPaymentMethodToApiValue(nextPaymentMethod);
       if (!authToken) {
         Alert.alert('Sign in required', 'Please sign in to save your payment method.');
         setPostLoginRoute('profile');
@@ -1114,7 +1434,7 @@ export default function App() {
         const res = await requestJson('/api/profile/', { method: 'PATCH', body: JSON.stringify({ preferred_payment_method: apiValue }) }, authToken);
         if (res.ok) {
           setProfile((prev: any) => ({ ...(prev || {}), preferred_payment_method: apiValue }));
-          Alert.alert('Saved', 'Your preferred payment method has been saved.');
+          Alert.alert('Saved', 'Cash on delivery is now your active payment method.');
         } else {
           Alert.alert('Error', res.data?.detail || res.data?.error || 'Could not save payment method');
         }
@@ -1255,6 +1575,11 @@ export default function App() {
       setCategories(normalizeCategoriesPayload(getCollectionPayload(categoryRes.data, 'categories')));
       setBrands(apiBrands.length ? apiBrands : getBrandsFromProducts(nextProducts));
       setProducts(nextProducts);
+      try {
+        await AsyncStorage.setItem(PRODUCTS_STORAGE_KEY, JSON.stringify(nextProducts));
+      } catch (err) {
+        console.warn('[CACHE] unable to persist products locally', err);
+      }
       // Start prefetching product images for faster display
       (async () => {
         try {
@@ -1273,12 +1598,7 @@ export default function App() {
 
       const profileUnauthorized = isAuthenticatedLoad && (profileRes.status === 401 || profileRes.status === 403);
       if (profileUnauthorized) {
-        setAuthToken(null);
-        try {
-          await AsyncStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
-        } catch (err) {
-          console.warn('[AUTH] Failed to clear invalid auth token', err);
-        }
+        console.warn('[AUTH] Server rejected a stored session; keeping the session until the user explicitly logs out.');
       }
 
       if (ordersRes.ok) {
@@ -1349,6 +1669,21 @@ export default function App() {
   }, [activeTab, authToken, debouncedOrderStatus]);
 
   useEffect(() => {
+    const persistAuthToken = async () => {
+      try {
+        if (authToken) {
+          await AsyncStorage.setItem(AUTH_TOKEN_STORAGE_KEY, authToken);
+        } else {
+          await AsyncStorage.removeItem(AUTH_TOKEN_STORAGE_KEY);
+        }
+      } catch (err) {
+        console.warn('[AUTH] Unable to persist token state', err);
+      }
+    };
+    void persistAuthToken();
+  }, [authToken]);
+
+  useEffect(() => {
     const restorePersistedCart = async () => {
       try {
         const raw = await AsyncStorage.getItem(CART_STORAGE_KEY);
@@ -1362,6 +1697,28 @@ export default function App() {
         console.warn('[CART] Unable to restore persisted cart', error);
       } finally {
         setCartHydrated(true);
+      }
+    };
+
+    const restorePersistedProducts = async () => {
+      try {
+        const raw = await AsyncStorage.getItem(PRODUCTS_STORAGE_KEY);
+        if (raw) {
+          const parsed = JSON.parse(raw);
+          if (parsed && Array.isArray(parsed)) {
+            setProducts(parsed);
+            // attempt to prefetch images for quicker resume
+            (async () => {
+              try {
+                await prefetchProductImages(parsed, { concurrency: 3, totalLimit: 80 }, prefetchedImagesRef);
+              } catch (err) {
+                // ignore
+              }
+            })();
+          }
+        }
+      } catch (err) {
+        console.warn('[CACHE] unable to restore persisted products', err);
       }
     };
 
@@ -1380,6 +1737,7 @@ export default function App() {
     };
 
     restorePersistedCart();
+    void restorePersistedProducts();
     restoreAuthToken();
   }, []);
 
@@ -1431,36 +1789,17 @@ export default function App() {
     }
 
     if (profile) {
+      const salonName = profile.salon_name || profile.business_name || profile.salonName || '';
       setProfileDraft({
         first_name: profile.first_name || '',
         last_name: profile.last_name || '',
         email: profile.email || '',
         phone_number: profile.phone_number || '',
+        salon_name: salonName,
       });
+      setPaymentMethod('Cash on delivery');
 
-      const normalizedAddresses = Array.isArray(profile.addresses) && profile.addresses.length
-        ? profile.addresses.map((entry: any, index: number) => ({
-            id: entry.id || `addr-${index}`,
-            label: entry.label || entry.name || 'Saved address',
-            address: entry.address || entry.line || entry.location || '',
-            district: entry.district || '',
-            village: entry.village || entry.city || '',
-            phone: entry.phone || entry.phone_number || '',
-            isDefault: Boolean(entry.is_default || entry.default || index === 0),
-          }))
-        : [];
-
-      if (profile.district && profile.village && !normalizedAddresses.some((entry: any) => entry.district === profile.district && entry.village === profile.village)) {
-        normalizedAddresses.unshift({
-          id: 'profile-address',
-          label: 'Primary',
-          address: formatDeliveryLocation(profile.district, profile.village),
-          district: profile.district,
-          village: profile.village,
-          phone: profile.phone_number || '',
-          isDefault: true,
-        });
-      }
+      const normalizedAddresses = deriveSavedAddressesFromProfile(profile);
 
       setSavedAddresses(normalizedAddresses);
       const currentSelection = normalizedAddresses.find((entry: any) => String(entry.id) === String(selectedAddressId));
@@ -1473,145 +1812,6 @@ export default function App() {
       }
     }
   }, [profile]);
-
-  useEffect(() => {
-    const loadNotificationPreference = async () => {
-      try {
-        const savedPreference = await AsyncStorage.getItem(NOTIFICATION_PREFERENCE_STORAGE_KEY);
-        if (savedPreference !== null) setNotificationEnabled(savedPreference === 'true');
-      } finally {
-        setNotificationPreferenceHydrated(true);
-      }
-    };
-    void loadNotificationPreference();
-  }, []);
-
-  // Push notification registration and listeners
-  const [expoPushToken, setExpoPushToken] = useState<string | null>(null);
-  const notificationListenerRef = useRef<any>(null);
-  const responseListenerRef = useRef<any>(null);
-
-  useEffect(() => {
-    if (!notificationEnabled) return undefined;
-
-    // Keep the app fully usable in Expo Go. Remote push support requires a
-    // development or production build that includes this app's credentials.
-    if (isRunningInExpoGo) {
-      console.info('[PUSH] Remote push notifications are unavailable in Expo Go.');
-      return undefined;
-    }
-
-    const Notifications = getNotificationsModule();
-    if (!Notifications) return undefined;
-
-    try {
-      Notifications.setNotificationHandler({
-        handleNotification: async () => ({
-          shouldShowAlert: true,
-          shouldShowBanner: true,
-          shouldShowList: true,
-          shouldPlaySound: false,
-          shouldSetBadge: false,
-        }),
-      });
-    } catch (error) {
-      console.warn('[PUSH] Unable to configure notifications.', error);
-      return undefined;
-    }
-
-    const register = async () => {
-      try {
-        const existing = await AsyncStorage.getItem(PUSH_TOKEN_STORAGE_KEY);
-        if (existing) setExpoPushToken(existing);
-
-        const { status: existingStatus } = await Notifications.getPermissionsAsync();
-        let finalStatus = existingStatus;
-        if (existingStatus !== 'granted') {
-          const perm = await Notifications.requestPermissionsAsync();
-          finalStatus = perm.status;
-        }
-        if (finalStatus !== 'granted') {
-          console.log('[PUSH] permission not granted');
-          return;
-        }
-
-        const tokenObj = await Notifications.getExpoPushTokenAsync();
-        const token = (tokenObj as any).data || tokenObj;
-        setExpoPushToken(token);
-        await AsyncStorage.setItem(PUSH_TOKEN_STORAGE_KEY, String(token));
-
-        // send token to backend if available; ignore failures
-        try {
-          await requestJson('/api/notifications/register-token/', { method: 'POST', body: JSON.stringify({ token }) }, authToken);
-        } catch (err) {
-          console.warn('[PUSH] register token send failed', err);
-        }
-
-        if (Platform.OS === 'android') {
-          try {
-            // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-            // @ts-ignore
-            await Notifications.setNotificationChannelAsync('default', { name: 'default', importance: Notifications.AndroidImportance.MAX, enableVibrate: true, sound: 'default' });
-          } catch (e) {
-            // ignore channel setup failure
-          }
-        }
-      } catch (e) {
-        console.warn('[PUSH] registration error', e);
-      }
-    };
-
-    void register();
-
-    notificationListenerRef.current = Notifications.addNotificationReceivedListener((notification) => {
-      try {
-        const title = notification.request.content.title || 'Notification';
-        const body = notification.request.content.body || '';
-        Alert.alert(title, body);
-        setAppNotifications((prev) => [notification.request.content, ...(prev || [])].slice(0, 50));
-      } catch (e) {
-        // ignore
-      }
-    });
-
-    responseListenerRef.current = Notifications.addNotificationResponseReceivedListener((response) => {
-      try {
-        // handle user tapping the notification: navigate to Orders
-        setActiveTab('Orders');
-      } catch (e) {
-        // ignore
-      }
-    });
-
-    return () => {
-      try {
-        if (notificationListenerRef.current) notificationListenerRef.current.remove();
-        if (responseListenerRef.current) responseListenerRef.current.remove();
-      } catch (e) {
-        // ignore
-      }
-    };
-  }, [authToken, notificationEnabled]);
-
-  useEffect(() => {
-    if (!notificationPreferenceHydrated) return;
-    void AsyncStorage.setItem(NOTIFICATION_PREFERENCE_STORAGE_KEY, String(notificationEnabled));
-  }, [notificationEnabled, notificationPreferenceHydrated]);
-
-  useEffect(() => {
-    if (!authToken || !notificationEnabled) {
-      setAppNotifications([]);
-      return;
-    }
-    let active = true;
-    const loadNotifications = async () => {
-      const response = await requestJson('/api/notifications/', { method: 'GET' }, authToken);
-      if (active && response.ok) setAppNotifications(Array.isArray(response.data) ? response.data : []);
-    };
-    void loadNotifications();
-    const refresh = setInterval(() => void loadNotifications(), 30000);
-    return () => { active = false; clearInterval(refresh); };
-  }, [authToken, notificationEnabled]);
 
   const getOrderTrackingSteps = (order: any) => {
     const status = (order?.order_status || 'Pending').toLowerCase();
@@ -1632,61 +1832,71 @@ export default function App() {
 
   const getDeliveryEta = (order: any) => {
     const status = (order?.order_status || 'Pending').toLowerCase();
-    if (status === 'delivered') return 'Delivered this morning';
-    if (status === 'out for delivery') return 'Rider on the way';
-    if (status === 'packed') return 'Ready for dispatch';
-    if (status === 'processing') return 'Preparing your items';
-    if (status === 'confirmed') return 'Waiting for seller packing';
+    const createdAt = order?.created_at ? new Date(order.created_at) : null;
+    const formatClock = (date: Date) => date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
+    if (status === 'delivered') {
+      if (createdAt && !Number.isNaN(createdAt.getTime())) {
+        return `Delivered at ${formatClock(new Date(createdAt.getTime() + 7 * 60 * 60 * 1000))}`;
+      }
+      return 'Delivered today';
+    }
+
+    if (status === 'out for delivery') {
+      if (createdAt && !Number.isNaN(createdAt.getTime())) {
+        return `Arrives by ${formatClock(new Date(createdAt.getTime() + 9 * 60 * 60 * 1000))}`;
+      }
+      return 'Rider on the way';
+    }
+
+    if (status === 'packed') {
+      if (createdAt && !Number.isNaN(createdAt.getTime())) {
+        return `Ready for dispatch by ${formatClock(new Date(createdAt.getTime() + 6 * 60 * 60 * 1000))}`;
+      }
+      return 'Ready for dispatch';
+    }
+
+    if (status === 'processing') {
+      if (createdAt && !Number.isNaN(createdAt.getTime())) {
+        return `Packing expected by ${formatClock(new Date(createdAt.getTime() + 5 * 60 * 60 * 1000))}`;
+      }
+      return 'Preparing your items';
+    }
+
+    if (status === 'confirmed') {
+      if (createdAt && !Number.isNaN(createdAt.getTime())) {
+        return `Packing starts around ${formatClock(new Date(createdAt.getTime() + 4 * 60 * 60 * 1000))}`;
+      }
+      return 'Waiting for seller packing';
+    }
+
     if (status === 'cancelled') return 'Order cancelled';
+    if (createdAt && !Number.isNaN(createdAt.getTime())) {
+      return `Awaiting confirmation by ${formatClock(new Date(createdAt.getTime() + 2 * 60 * 60 * 1000))}`;
+    }
     return 'Waiting for seller confirmation';
   };
 
   const getTrackingHistory = (order: any) => {
     const status = (order?.order_status || 'Pending').toLowerCase();
-    const history = [{ time: '09:20', event: 'Order received', detail: 'Your order request is now in review with the seller.' }];
+    const createdAt = order?.created_at ? new Date(order.created_at) : new Date();
+    const toHistoryTime = (minutesOffset: number) => {
+      const eventTime = new Date(createdAt.getTime() + minutesOffset * 60 * 1000);
+      return eventTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    };
 
-    if (status === 'pending') {
-      history.push({ time: '09:25', event: 'Awaiting seller confirmation', detail: 'Seller will confirm stock and availability shortly.' });
-      return history;
+    if (status !== 'delivered') {
+      return [];
     }
 
-    if (status === 'confirmed') {
-      history.push({ time: '09:30', event: 'Seller confirmed', detail: 'Your order has been confirmed and will move to packing.' });
-      history.push({ time: '10:05', event: 'Packing started', detail: 'The selected salon essentials are being prepared.' });
-      return history;
-    }
-
-    if (status === 'processing' || status === 'packed' || status === 'out for delivery' || status === 'delivered') {
-      history.push({ time: '09:30', event: 'Seller confirmed', detail: 'Your order has been confirmed and will move to packing.' });
-    }
-
-    if (status === 'processing') {
-      history.push({ time: '10:05', event: 'Packing started', detail: 'The selected salon essentials are being prepared.' });
-      return history;
-    }
-
-    if (status === 'packed') {
-      history.push({ time: '10:05', event: 'Packing started', detail: 'The selected salon essentials are being prepared.' });
-      history.push({ time: '11:20', event: 'Packing complete', detail: 'Your order is ready for pickup by the delivery rider.' });
-      return history;
-    }
-
-    if (status === 'out for delivery') {
-      history.push({ time: '10:05', event: 'Packing started', detail: 'The selected salon essentials are being prepared.' });
-      history.push({ time: '11:20', event: 'Packing complete', detail: 'Your order is ready for pickup by the delivery rider.' });
-      history.push({ time: '13:45', event: 'Picked up by rider', detail: 'Your package is now en route for delivery.' });
-      return history;
-    }
-
-    if (status === 'delivered') {
-      history.push({ time: '10:05', event: 'Packing started', detail: 'The selected salon essentials are being prepared.' });
-      history.push({ time: '11:20', event: 'Packing complete', detail: 'Your order is ready for pickup by the delivery rider.' });
-      history.push({ time: '13:45', event: 'Picked up by rider', detail: 'Your package is now en route for delivery.' });
-      history.push({ time: '16:10', event: 'Delivered', detail: 'The order was handed over successfully.' });
-      return history;
-    }
-
-    return history;
+    return [
+      { time: toHistoryTime(0), event: 'Order received', detail: 'Your order request is now in review with the seller.' },
+      { time: toHistoryTime(30), event: 'Seller confirmed', detail: 'Your order has been confirmed and will move to packing.' },
+      { time: toHistoryTime(120), event: 'Packing started', detail: 'The selected salon essentials are being prepared.' },
+      { time: toHistoryTime(240), event: 'Packing complete', detail: 'Your order is ready for pickup by the delivery rider.' },
+      { time: toHistoryTime(360), event: 'Picked up by rider', detail: 'Your package is now en route for delivery.' },
+      { time: toHistoryTime(480), event: 'Delivered', detail: 'The order was handed over successfully.' },
+    ];
   };
 
   // Admin helpers: update order status and cancel (admin endpoints)
@@ -1858,6 +2068,32 @@ export default function App() {
     return response;
   };
 
+  const refreshProductById = async (productId: number) => {
+    if (!productId) return null;
+    const candidates = [
+      `/api/catalog/products/${productId}/`,
+      `/api/products/${productId}/`,
+    ];
+    for (const path of candidates) {
+      try {
+        const res = await requestJson(path, {}, authToken);
+        console.log('[API] refreshProductById', path, res);
+        if (res && res.ok && res.data) {
+          const productData = res.data;
+          setProducts((prev) => {
+            const found = prev.some((p: any) => String(p.id) === String(productData.id));
+            if (found) return prev.map((p: any) => (String(p.id) === String(productData.id) ? productData : p));
+            return [productData, ...prev];
+          });
+          return productData;
+        }
+      } catch (err) {
+        // ignore and try next
+      }
+    }
+    return null;
+  };
+
   const refreshProfile = async () => {
     if (!authToken) return null;
     try {
@@ -1866,33 +2102,15 @@ export default function App() {
       if (res.ok) {
         setProfile(res.data);
         setProfilePhoto(res.data?.profile_image || null);
-        // Populate savedAddresses if backend provides them, or derive a primary address from profile
-        const serverAddresses = res.data?.addresses || res.data?.saved_addresses || res.data?.address_list || null;
-        if (Array.isArray(serverAddresses) && serverAddresses.length) {
-          setSavedAddresses(serverAddresses.map((a: any) => ({
-            id: a.id ?? a.address_id ?? a.pk ?? a._id ?? a.label ?? `${a.district}-${a.village}`,
-            label: a.label || a.name || 'Address',
-            address: a.address || formatDeliveryLocation(a.district || '', a.village || ''),
-            district: a.district || a.region || '',
-            village: a.village || a.village_name || a.area || '',
-            phone: a.phone_number || a.phone || '',
-          })));
-        } else if (res.data?.district || res.data?.village || res.data?.address) {
-          const primary = {
-            id: res.data?.id ? `profile-${res.data.id}` : `profile-${Date.now()}`,
-            label: 'Primary',
-            address: res.data?.address || formatDeliveryLocation(res.data?.district || '', res.data?.village || ''),
-            district: res.data?.district || '',
-            village: res.data?.village || '',
-            phone: res.data?.phone_number || '',
-          };
-          setSavedAddresses([primary]);
+        const derivedAddresses = deriveSavedAddressesFromProfile(res.data);
+        setSavedAddresses(derivedAddresses);
+        if (derivedAddresses.length && (!selectedAddressId || !derivedAddresses.some((entry: any) => String(entry.id) === String(selectedAddressId)))) {
+          setSelectedAddressId(String(derivedAddresses[0].id));
         }
         return res.data;
       }
       if (res.status === 401 || res.status === 403) {
-        setAuthToken(null);
-        try { await AsyncStorage.removeItem(AUTH_TOKEN_STORAGE_KEY); } catch (err) { console.warn('[AUTH] remove token failed', err); }
+        console.warn('[AUTH] refreshProfile received 401/403; keeping the saved session until the user logs out explicitly.');
       }
       return null;
     } catch (err) {
@@ -1902,14 +2120,24 @@ export default function App() {
   };
 
   const handleAddToCart = async (productId: number, quantity: number = 1, product?: any) => {
-    if (product && isProductOutOfStock(product)) {
+    const productDetails = product || products.find((item: any) => Number(item.id) === Number(productId));
+    const stock = productDetails ? getProductStockQuantity(productDetails) : null;
+    const currentCartQty = Number((cart?.items || []).find((item: any) => Number(item.product_id ?? item.id) === Number(productId))?.quantity || 0);
+    const currentQty = Math.max(cartQuantities[productId] || 0, currentCartQty);
+
+    if (productDetails && isProductOutOfStock(productDetails)) {
       setError('This product is currently out of stock.');
       return;
     }
-    const currentQty = cartQuantities[productId] || 0;
+    if (stock !== null && Number.isFinite(stock) && currentQty + quantity > stock) {
+      const available = Math.max(0, stock - currentQty);
+      setError(available > 0 ? `Only ${available} item${available === 1 ? '' : 's'} left in stock.` : 'This product is currently out of stock.');
+      return;
+    }
+
     const nextQty = currentQty + quantity;
     setCartQuantities((prev) => ({ ...prev, [productId]: nextQty }));
-    syncCartWithQuantity(productId, nextQty, product);
+    syncCartWithQuantity(productId, nextQty, productDetails || product);
 
     if (!authToken) {
       return;
@@ -1922,7 +2150,13 @@ export default function App() {
       }, authToken);
       if (!response.ok) {
         await refreshServerCart(authToken);
-        setError(getApiErrorMessage(response.data, 'Unable to add this product to your cart.'));
+        const message = getApiErrorMessage(response.data, 'Unable to add this product to your cart.');
+        if (message.toLowerCase().includes('stock')) {
+          await refreshProductById(productId);
+          setError('This product has limited stock available. Please reduce the quantity and try again.');
+        } else {
+          setError(message);
+        }
         return;
       }
       await refreshServerCart(authToken);
@@ -1932,12 +2166,20 @@ export default function App() {
   };
 
   const adjustProductQuantity = async (productId: number, delta: number, product?: any) => {
-    if (delta > 0 && product && isProductOutOfStock(product)) {
+    const productDetails = product || products.find((item: any) => Number(item.id) === Number(productId));
+    const stock = productDetails ? getProductStockQuantity(productDetails) : null;
+
+    if (delta > 0 && productDetails && isProductOutOfStock(productDetails)) {
       setError('This product is currently out of stock.');
       return;
     }
     const currentQty = cartQuantities[productId] || 0;
     const nextQty = Math.max(0, currentQty + delta);
+    if (stock !== null && Number.isFinite(stock) && nextQty > stock) {
+      const available = Math.max(0, stock - currentQty);
+      setError(available > 0 ? `Only ${available} item${available === 1 ? '' : 's'} left in stock.` : 'This product is currently out of stock.');
+      return;
+    }
     setCartQuantities((prev) => {
       if (nextQty <= 0) {
         const updated = { ...prev };
@@ -1946,13 +2188,21 @@ export default function App() {
       }
       return { ...prev, [productId]: nextQty };
     });
-    syncCartWithQuantity(productId, nextQty, product);
+    syncCartWithQuantity(productId, nextQty, productDetails || product);
 
     if (!authToken) return;
     try {
       if (delta > 0) {
         const response = await requestJson('/api/cart/add/', { method: 'POST', body: JSON.stringify({ product_id: productId, quantity: delta }) }, authToken);
-        if (!response.ok) setError(getApiErrorMessage(response.data, 'Unable to update cart quantity.'));
+        if (!response.ok) {
+          const message = getApiErrorMessage(response.data, 'Unable to update cart quantity.');
+          if (message.toLowerCase().includes('stock')) {
+            await refreshProductById(productId);
+            setError('This product has limited stock available. Please reduce the quantity and try again.');
+          } else {
+            setError(message);
+          }
+        }
       } else {
         const cartItem = (cart?.items || []).find((item: any) => Number(item.product_id ?? item.id) === Number(productId));
         if (!cartItem?.id) {
@@ -2096,7 +2346,7 @@ export default function App() {
       setProfileAuthMode('login');
       setProfileAuthError(null);
       setPostLoginRoute('checkout');
-      setActiveTab('Profile');
+      setActiveTab('Settings');
       setProfileRoute('login');
       return false;
     }
@@ -2116,7 +2366,7 @@ export default function App() {
     setProfileAuthMode('login');
     setProfileAuthError(null);
     setPostLoginRoute('orders');
-    setActiveTab('Profile');
+    setActiveTab('Settings');
     setProfileRoute('login');
     return false;
   };
@@ -2244,14 +2494,27 @@ export default function App() {
     if (!authToken || !items.length) return true;
 
     for (const item of items) {
+      const productId = Number(item.product_id ?? item.id);
+      const requestedQty = Number(item.quantity || 1);
+      const existingCartQty = Number((cart?.items || []).find((cartItem: any) => Number(cartItem.product_id ?? cartItem.id) === productId)?.quantity || 0);
+      const productDetails = products.find((product: any) => Number(product.id) === productId);
+      const stock = productDetails ? getProductStockQuantity(productDetails) : null;
+
+      if (stock !== null && Number.isFinite(stock) && existingCartQty + requestedQty > stock) {
+        console.warn('[CART] skipping sync for product with insufficient stock', { productId, requestedQty, existingCartQty, stock });
+        setError(existingCartQty > 0 ? `Only ${Math.max(0, stock - existingCartQty)} item${Math.max(0, stock - existingCartQty) === 1 ? '' : 's'} left in stock.` : 'This product is currently out of stock.');
+        return false;
+      }
+
       const payload = {
-        product_id: item.product_id ?? item.id,
-        quantity: Number(item.quantity || 1),
+        product_id: productId,
+        quantity: requestedQty,
       };
 
       const res = await requestJson('/api/cart/add/', { method: 'POST', body: JSON.stringify(payload) }, authToken);
       if (!res.ok) {
         console.error('cart sync failed', payload, res);
+        setError(getApiErrorMessage(res.data, 'Unable to sync cart to server right now.'));
         return false;
       }
     }
@@ -2283,12 +2546,14 @@ export default function App() {
       }, isBrandMode ? 'brand' : 'category');
     });
 
-    const filteredCategoryProducts = productsForCatalog.filter((product: any) => {
-      const search = (searchTerm || '').trim().toLowerCase();
-      if (!search) return true;
-      const productName = `${product.product_name || ''} ${product.description || ''}`.toLowerCase();
-      return productName.includes(search);
-    });
+    let filteredCategoryProducts = productsForCatalog.filter((product: any) => matchesProductSearch(product, searchTerm));
+
+    // Apply availability filter from the new dropdown control
+    if (categoryFilterMode === 'in_stock') {
+      filteredCategoryProducts = filteredCategoryProducts.filter((p: any) => !isProductOutOfStock(p));
+    } else if (categoryFilterMode === 'out_of_stock') {
+      filteredCategoryProducts = filteredCategoryProducts.filter((p: any) => isProductOutOfStock(p));
+    }
 
     const sortedCategoryProducts = [...filteredCategoryProducts].sort((a: any, b: any) => {
       if (categorySortMode === 'price') {
@@ -2323,13 +2588,6 @@ export default function App() {
           </TouchableOpacity>
         </View>
 
-        <View style={styles.searchBarCategories}>
-          <TextInput style={styles.searchInput} placeholder="Search products..." placeholderTextColor="#9CA3AF" value={searchTerm} onChangeText={setSearchTerm} />
-          <TouchableOpacity style={styles.searchButton}>
-            <Text style={styles.searchButtonIcon}>🔍</Text>
-          </TouchableOpacity>
-        </View>
-
         <View style={styles.categorySplitView}>
           {showSidebar ? (
             <ScrollView
@@ -2353,7 +2611,7 @@ export default function App() {
                     <View style={[styles.sidebarIconBadge, { backgroundColor: item.iconBg }]}> 
                       <Image source={{ uri: item.imageUrl }} style={styles.sidebarIconImage} />
                     </View>
-                    <Text style={[styles.sidebarLabel, active && styles.sidebarLabelActive]}>{item.title}</Text>
+                    <Text style={[styles.sidebarLabel, active && styles.sidebarLabelActive]} numberOfLines={2}>{item.title}</Text>
                   </TouchableOpacity>
                 );
               })}
@@ -2361,12 +2619,47 @@ export default function App() {
           ) : null}
           <View style={styles.categoryContentArea}>
             <View style={styles.categoryIntroCard}>
-              <View style={styles.categoryIntroTextBlock}>
-                <Text style={styles.sectionTitle}>{selectedLabel}</Text>
-                <Text style={styles.categoryIntroText}>{catalogDescription}</Text>
-              </View>
-              <View style={styles.categoryIntroChip}>
-                <Text style={styles.categoryIntroChipText}>{sortedCategoryProducts.length} items</Text>
+              <View style={styles.categoryIntroHeaderRow}>
+                <View style={styles.categoryIntroTextBlock}>
+                  <Text style={styles.sectionTitle}>{selectedLabel}</Text>
+                  <Text style={styles.categoryIntroText}>{catalogDescription}</Text>
+                </View>
+                  <View style={styles.categoryIntroMetaWrap}>
+                  <View style={styles.categoryIntroSearchBox}>
+                    <TextInput
+                      style={styles.categoryIntroSearchInput}
+                      placeholder="Search..."
+                      placeholderTextColor="#9CA3AF"
+                      value={searchTerm}
+                      onChangeText={setSearchTerm}
+                    />
+                  </View>
+                    <View style={styles.categoryIntroChipDropdown}>
+                      <Text style={styles.categoryIntroChipIcon}>📁</Text>
+                      <TouchableOpacity style={styles.categoryIntroChipButton} onPress={() => setCategoryFilterOpen(true)}>
+                        <Text style={styles.categoryIntroChipText}>{categoryFilterMode === 'all' ? 'All products' : categoryFilterMode === 'in_stock' ? 'In stock' : 'Out of stock'}</Text>
+                      </TouchableOpacity>
+                      <Modal visible={categoryFilterOpen} transparent animationType="fade" onRequestClose={() => setCategoryFilterOpen(false)}>
+                        <View style={styles.locationModalOverlay}>
+                          <View style={[styles.locationModalCard, { width: 280 }] }>
+                            <Text style={styles.locationModalTitle}>Filter products</Text>
+                            <TouchableOpacity style={styles.locationOption} onPress={() => { setCategoryFilterMode('all'); setCategoryFilterOpen(false); }}>
+                              <Text style={styles.locationOptionText}>All products</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={styles.locationOption} onPress={() => { setCategoryFilterMode('in_stock'); setCategoryFilterOpen(false); }}>
+                              <Text style={styles.locationOptionText}>In stock</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={styles.locationOption} onPress={() => { setCategoryFilterMode('out_of_stock'); setCategoryFilterOpen(false); }}>
+                              <Text style={styles.locationOptionText}>Out of stock</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={styles.secondaryButton} onPress={() => setCategoryFilterOpen(false)}>
+                              <Text style={styles.secondaryButtonText}>Cancel</Text>
+                            </TouchableOpacity>
+                          </View>
+                        </View>
+                      </Modal>
+                    </View>
+                </View>
               </View>
             </View>
 
@@ -2468,10 +2761,7 @@ export default function App() {
     if (!isAuthenticated) {
       return (
         <View style={styles.ordersPage}>
-          <View style={[styles.screenHeaderNavy, { paddingVertical: 18, minHeight: 84 }]}>
-            <TouchableOpacity style={[styles.headerIconButton, { backgroundColor: 'transparent', borderWidth: 0, width: 36, height: 36 }]} onPress={() => setActiveTab('Home')}>
-              <Text style={styles.headerBackArrow}>{'<'}</Text>
-            </TouchableOpacity>
+          <View style={[styles.screenHeaderNavy, { paddingVertical: 18, minHeight: 84 }]}> 
             <Text style={[styles.headerTitle, { fontSize: 20, fontWeight: '800' }]}>My Orders</Text>
             <View style={{ width: 36, height: 36 }} />
           </View>
@@ -2488,7 +2778,7 @@ export default function App() {
 
     const filteredOrders = orders.filter((order: any) => {
       const matchesStatus = order._local || selectedOrderStatus === 'All' || (order.order_status || '').toLowerCase() === selectedOrderStatus.toLowerCase();
-      const matchesSearch = !orderSearch || (order.order_number || '').toLowerCase().includes(orderSearch.toLowerCase());
+      const matchesSearch = matchesOrderSearch(order, orderSearch);
       return matchesStatus && matchesSearch;
     });
 
@@ -2498,9 +2788,12 @@ export default function App() {
 
     const selectedOrderHeader = selectedOrder ? (() => {
       const orderDate = selectedOrder.created_at ? new Date(selectedOrder.created_at).toLocaleString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : 'Pending';
+      const selectedSalonName = selectedOrder.salon_name || selectedOrder.business_name || selectedOrder.salonName || selectedOrder.customer?.salon_name || 'Salon order';
+      const selectedDeliveryAddress = selectedOrder.delivery_address || selectedOrder.address || selectedOrder.shipping_address || selectedOrder.deliveryAddress || selectedOrder.location || selectedOrder.customer_address || 'Delivery address pending';
       const trackingSteps = getOrderTrackingSteps(selectedOrder);
       const eta = getDeliveryEta(selectedOrder);
       const trackingHistory = getTrackingHistory(selectedOrder);
+      const showTrackingHistory = (selectedOrder.order_status || '').toLowerCase() === 'delivered';
       const statusMessage = (selectedOrder.order_status || 'Pending').toLowerCase() === 'pending'
         ? 'Your order is awaiting seller confirmation.'
         : (selectedOrder.order_status || 'Pending').toLowerCase() === 'confirmed'
@@ -2513,6 +2806,8 @@ export default function App() {
               <View style={{ flex: 1, paddingRight: 8 }}>
                 <Text style={styles.detailNumber}>{selectedOrder.order_number || `#${selectedOrder.id}`}</Text>
                 <Text style={styles.detailMeta}>{orderDate}</Text>
+                <Text style={styles.detailMeta}>{selectedSalonName}</Text>
+                <Text style={styles.detailMeta}>{selectedDeliveryAddress}</Text>
                 <Text style={styles.detailMeta}>{selectedOrder.payment_method || 'Pay on Delivery'}</Text>
               </View>
               <TouchableOpacity style={styles.detailCloseButton} onPress={() => setSelectedOrderId(null)}>
@@ -2547,22 +2842,20 @@ export default function App() {
             ))}
           </View>
 
-          <View style={styles.trackingCard}>
-            <Text style={styles.trackingTitle}>Tracking history</Text>
-            {trackingHistory.map((entry, index) => (
-              <View key={`${entry.time}-${index}`} style={styles.historyRow}>
-                <Text style={styles.historyTime}>{entry.time}</Text>
-                <View style={styles.historyContent}>
-                  <Text style={styles.timelineTitle}>{entry.event}</Text>
-                  <Text style={styles.timelineDescription}>{entry.detail}</Text>
+          {showTrackingHistory ? (
+            <View style={styles.trackingCard}>
+              <Text style={styles.trackingTitle}>Tracking history</Text>
+              {trackingHistory.map((entry, index) => (
+                <View key={`${entry.time}-${index}`} style={styles.historyRow}>
+                  <Text style={styles.historyTime}>{entry.time}</Text>
+                  <View style={styles.historyContent}>
+                    <Text style={styles.timelineTitle}>{entry.event}</Text>
+                    <Text style={styles.timelineDescription}>{entry.detail}</Text>
+                  </View>
                 </View>
-              </View>
-            ))}
-          </View>
-
-          <TouchableOpacity style={styles.detailButton} onPress={() => Alert.alert('Support', 'A Glow support agent will assist with your delivery update shortly.') }>
-            <Text style={styles.detailButtonText}>Need help with this delivery?</Text>
-          </TouchableOpacity>
+              ))}
+            </View>
+          ) : null}
         </View>
       );
     })() : null;
@@ -2607,9 +2900,6 @@ export default function App() {
     return (
       <View style={styles.ordersPage}>
         <View style={[styles.screenHeaderNavy, { paddingVertical: 18, minHeight: 84, borderBottomLeftRadius: 0, borderBottomRightRadius: 0 }]}>
-          <TouchableOpacity style={[styles.headerIconButton, { backgroundColor: 'transparent', borderWidth: 0, width: 36, height: 36 }]} onPress={() => setActiveTab('Home')}>
-            <Text style={styles.headerBackArrow}>{'<'}</Text>
-          </TouchableOpacity>
           <Text style={[styles.headerTitle, { fontSize: 20, fontWeight: '800' }]}>My Orders</Text>
           <View style={{ width: 36, height: 36 }} />
         </View>
@@ -2698,9 +2988,19 @@ export default function App() {
                 ) : (
                   <>
                     <Text style={styles.profileAuthFieldLabel}>NEW PASSWORD</Text>
-                    <TextInput style={styles.inputField} value={recoveryPassword} onChangeText={setRecoveryPassword} placeholder="At least 8 characters" secureTextEntry placeholderTextColor="#94A3B8" />
+                    <View style={styles.passwordInputRow}>
+                      <TextInput style={[styles.inputField, styles.passwordInput]} value={recoveryPassword} onChangeText={setRecoveryPassword} placeholder="At least 8 characters" secureTextEntry={!showRecoveryPassword} placeholderTextColor="#94A3B8" />
+                      <TouchableOpacity style={styles.passwordToggleButton} onPress={() => setShowRecoveryPassword((value) => !value)}>
+                        <Text style={styles.passwordToggleText}>{showRecoveryPassword ? 'Hide' : 'Show'}</Text>
+                      </TouchableOpacity>
+                    </View>
                     <Text style={styles.profileAuthFieldLabel}>CONFIRM NEW PASSWORD</Text>
-                    <TextInput style={styles.inputField} value={recoveryPasswordConfirm} onChangeText={setRecoveryPasswordConfirm} placeholder="Enter the password again" secureTextEntry placeholderTextColor="#94A3B8" />
+                    <View style={styles.passwordInputRow}>
+                      <TextInput style={[styles.inputField, styles.passwordInput]} value={recoveryPasswordConfirm} onChangeText={setRecoveryPasswordConfirm} placeholder="Enter the password again" secureTextEntry={!showRecoveryConfirmPassword} placeholderTextColor="#94A3B8" />
+                      <TouchableOpacity style={styles.passwordToggleButton} onPress={() => setShowRecoveryConfirmPassword((value) => !value)}>
+                        <Text style={styles.passwordToggleText}>{showRecoveryConfirmPassword ? 'Hide' : 'Show'}</Text>
+                      </TouchableOpacity>
+                    </View>
                   </>
                 )}
               </>
@@ -2722,7 +3022,12 @@ export default function App() {
               <TextInput style={styles.inputField} value={profileAuthEmail} onChangeText={setProfileAuthEmail} placeholder={isLogin ? 'Email address or phone number' : 'Email address (optional)'} keyboardType={isLogin ? 'default' : 'email-address'} autoCapitalize="none" placeholderTextColor="#94A3B8" />
               {!isLogin ? <TextInput style={styles.inputField} value={profileAuthPhone} onChangeText={setProfileAuthPhone} placeholder="Phone number (optional)" keyboardType="phone-pad" placeholderTextColor="#94A3B8" /> : null}
               <Text style={styles.profileAuthFieldLabel}>PASSWORD</Text>
-              <TextInput style={styles.inputField} value={profileAuthPassword} onChangeText={setProfileAuthPassword} placeholder="At least 8 characters" secureTextEntry placeholderTextColor="#94A3B8" />
+              <View style={styles.passwordInputRow}>
+                <TextInput style={[styles.inputField, styles.passwordInput]} value={profileAuthPassword} onChangeText={setProfileAuthPassword} placeholder="At least 8 characters" secureTextEntry={!showProfilePassword} placeholderTextColor="#94A3B8" />
+                <TouchableOpacity style={styles.passwordToggleButton} onPress={() => setShowProfilePassword((value) => !value)}>
+                  <Text style={styles.passwordToggleText}>{showProfilePassword ? 'Hide' : 'Show'}</Text>
+                </TouchableOpacity>
+              </View>
               {!isLogin ? <Text style={styles.profileAuthHint}>Enter an email address, phone number, or both. You can use either one to sign in.</Text> : null}
             </> : null}
             {profileAuthError ? <Text style={styles.profileAuthError}>{profileAuthError}</Text> : null}
@@ -2776,12 +3081,10 @@ export default function App() {
       change_password: { title: 'Change Password', body: 'Set a new password to keep your account protected.' },
       payment_methods: { title: 'Payment Methods', body: 'Manage your preferred payment method for salon orders.' },
       addresses: { title: 'Addresses', body: 'Add or update where your salon essentials should be delivered.' },
-      notification_settings: { title: 'Notification Settings', body: 'Toggle reminders, offers, and delivery updates.' },
       help: { title: 'Help & Support', body: 'Contact Glow support for quick assistance with your orders.' },
       about: { title: 'About Glow', body: 'Learn more about Glow, our promises, and delivery policies.' },
-      settings: { title: 'Settings', body: 'Fine-tune your app experience, notifications, and privacy preferences.' },
+      settings: { title: 'Settings', body: 'Fine-tune your app experience and privacy preferences.' },
       security: { title: 'Security & Privacy', body: 'Protect your account with verification, password recovery, and secure sign-in controls.' },
-      notifications: { title: 'Notifications', body: 'Stay updated on deliveries, new arrivals, and order milestones.' },
       favorites: { title: 'Favorites', body: 'Save your most-loved salon essentials for faster reordering.' },
     };
 
@@ -2820,6 +3123,10 @@ export default function App() {
       const subtotal = cartSubtotal;
       const deliveryFee = 0;
       const total = subtotal + deliveryFee;
+      const combinedRecentlyViewed = deduplicateItems(
+        [...recentlyViewed, ...wishlist.filter((item: any) => item && (item.product_name || item.name))],
+        (item: any) => `${item.id || item.product_id || item.product_name || item.name || 'saved'}::${item.product_name || item.name || 'saved'}`
+      ).slice(0, 6);
 
       return (
         <ScrollView style={styles.profilePage} contentContainerStyle={styles.profilePageContent} showsVerticalScrollIndicator={false}>
@@ -2880,26 +3187,26 @@ export default function App() {
                   if (!requireAuthenticatedCheckout()) return;
                   setProfileRoute('checkout');
                 }}>
-                  <Text style={styles.primaryButtonText}>Proceed to checkout</Text>
+                  <Text style={styles.primaryButtonText}>Checkout</Text>
                 </TouchableOpacity>
               </>
             ) : (
               <>
                 <View style={styles.emptyStateCard}>
-                  <Text style={styles.emptyStateTitle}>Your cart is ready for your first order</Text>
+                  <Text style={styles.emptyStateTitle}>Your cart is empty</Text>
                   <Text style={styles.emptyStateText}>Pick salon essentials from the home page and they will appear here with a clear checkout summary.</Text>
                 </View>
                 <TouchableOpacity style={styles.primaryButton} onPress={() => { setProfileRoute('profile'); setActiveTab('Home'); }}>
-                  <Text style={styles.primaryButtonText}>Browse products</Text>
+                  <Text style={styles.primaryButtonText}>Start shopping</Text>
                 </TouchableOpacity>
               </>
             )}
           </View>
-          {recentlyViewed.length ? (
+          {combinedRecentlyViewed.length ? (
             <View style={styles.recentlyViewedSection}>
               <Text style={styles.recentlyViewedTitle}>Recently viewed</Text>
               <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.recentlyViewedList}>
-                {recentlyViewed.slice(0, 6).map((item: any, index: number) => (
+                {combinedRecentlyViewed.map((item: any, index: number) => (
                   <TouchableOpacity key={getListItemKey(item, index, 'cart-recently-viewed')} style={styles.recentlyViewedCard} onPress={() => openProductDetail(item)}>
                     <CatalogImage uri={getProductImageUrls(item)[0]} style={styles.recentlyViewedImage} />
                     <Text style={styles.recentlyViewedName} numberOfLines={2}>{item.product_name || item.name}</Text>
@@ -2959,7 +3266,22 @@ export default function App() {
             </View>
             <View style={styles.profileDetailCard}>
               <View style={styles.checkoutIntroCard}>
-                <Text style={styles.checkoutIntroTitle}>{cartItems.length} item{cartItems.length === 1 ? '' : 's'} ready for delivery</Text>
+                <Text style={styles.checkoutIntroTitle}>Items ready for delivery</Text>
+                <View style={styles.checkoutItemsList}>
+                  {cartItems.map((item: any, index: number) => {
+                    const productName = item.product_name || item.name || `Item ${index + 1}`;
+                    const imageUri = getProductImageUrls(item)[0] || 'https://images.unsplash.com/photo-1522335789203-aabd1fc54bc9?auto=format&fit=crop&w=400&q=80';
+                    return (
+                      <View key={`${productName}-${index}`} style={styles.checkoutItemRow}>
+                        <Image source={{ uri: imageUri }} style={styles.checkoutItemImage} resizeMode="cover" />
+                        <View style={styles.checkoutItemTextWrap}>
+                          <Text style={styles.checkoutItemName} numberOfLines={2}>{productName}</Text>
+                          <Text style={styles.checkoutItemMeta}>Qty {item.quantity || 1}</Text>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
                 <Text style={styles.checkoutIntroText}>Your order is securely sent to the seller for confirmation.</Text>
               </View>
               <View style={styles.checkoutSectionHeader}><Text style={styles.checkoutSectionTitle}>Delivery address</Text><Text style={styles.checkoutSectionStatus}>Required</Text></View>
@@ -3010,7 +3332,19 @@ export default function App() {
 
                 const normalizedItems = (cart?.items || []).filter((item: any) => Number(item.quantity || 1) > 0);
                 const hasValidQuantity = normalizedItems.every((item: any) => Number(item.quantity || 1) >= 1);
-                const selectedAddress = savedAddresses.find((entry: any) => String(entry.id) === String(selectedAddressId));
+                let selectedAddress = savedAddresses.find((entry: any) => String(entry.id) === String(selectedAddressId));
+                if (!selectedAddress && savedAddresses.length) {
+                  selectedAddress = savedAddresses[0];
+                  setSelectedAddressId(String(selectedAddress.id));
+                }
+                if (!selectedAddress && profile) {
+                  const derivedAddresses = deriveSavedAddressesFromProfile(profile);
+                  if (derivedAddresses.length) {
+                    setSavedAddresses(derivedAddresses);
+                    selectedAddress = derivedAddresses[0];
+                    setSelectedAddressId(String(selectedAddress.id));
+                  }
+                }
                 const trimmedAddress = formatDeliveryLocation(selectedAddress?.district || '', selectedAddress?.village || '');
                 const checkoutPhone = String(selectedAddress?.phone || profile?.phone_number || '').trim();
                 console.log('[CHECKOUT] selectedAddressId:', selectedAddressId, 'selectedAddress:', selectedAddress, 'savedAddresses:', savedAddresses);
@@ -3107,7 +3441,7 @@ export default function App() {
                   setProfileRoute('order_success');
                 }
               }}>
-                <Text style={styles.primaryButtonText}>Confirm order · UGX {total.toLocaleString('en-US')}</Text>
+                <Text style={styles.primaryButtonText}>Checkout · UGX {total.toLocaleString('en-US')}</Text>
               </TouchableOpacity>
             </View>
           </ScrollView>
@@ -3206,9 +3540,10 @@ export default function App() {
             </View>
 
             <TouchableOpacity style={styles.secondaryButton} onPress={() => {
-              const chosen = savedAddresses.find((a: any) => String(a.id) === String(selectedAddressId));
+              const chosen = savedAddresses.find((a: any) => String(a.id) === String(selectedAddressId)) || savedAddresses[0];
               if (chosen) {
-                setProfile((prev: any) => (prev ? { ...prev, address: chosen.address || deliveryAddress, district: chosen.district || prev.district, village: chosen.village || prev.village } : prev));
+                selectAddress(chosen);
+                setProfile((prev: any) => (prev ? { ...prev, address: chosen.address || deliveryAddress, district: chosen.district || prev.district, village: chosen.village || prev.village, phone_number: chosen.phone || prev.phone_number } : prev));
               } else {
                 setProfile((prev: any) => (prev ? { ...prev, address: deliveryAddress } : prev));
               }
@@ -3281,7 +3616,7 @@ export default function App() {
                 setShowPasswordRecovery(true);
                 setRecoveryIdentifier(profile?.email || profile?.phone_number || '');
                 setProfileAuthError(null);
-                setActiveTab('Profile');
+                setActiveTab('Settings');
                 setProfileRoute('login');
               }}>
                 <Text style={styles.secondaryButtonText}>Reset password</Text>
@@ -3289,47 +3624,6 @@ export default function App() {
             </View>
             <TouchableOpacity style={styles.primaryButton} onPress={() => setProfileRoute('profile')}>
               <Text style={styles.primaryButtonText}>Back to Profile</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      );
-    }
-
-    if (profileRoute === 'notifications') {
-      return (
-        <View style={styles.profilePage}>
-          <View style={styles.profileHeaderBlock}>
-            <View style={styles.profileHeaderRow}>
-              <View style={styles.profileHeaderBack} />
-              <Text style={styles.profileHeaderTitle}>Notifications</Text>
-              <View style={styles.profileHeaderBack} />
-            </View>
-            <Text style={styles.profileHeaderScreenTitle}>Stay informed</Text>
-          </View>
-          <View style={styles.profileDetailCard}>
-            <View style={styles.notificationCard}>
-              <View style={styles.notificationTextArea}>
-                <Text style={styles.infoLabel}>App notifications</Text>
-                <Text style={styles.profileDetailBody}>Receive order updates, delivery ETA changes, and new-arrival announcements.</Text>
-              </View>
-              <Switch value={notificationEnabled} onValueChange={setNotificationEnabled} thumbColor={notificationEnabled ? '#F5821F' : '#FFFFFF'} trackColor={{ false: '#D1D5DB', true: '#FDC38B' }} />
-            </View>
-            {notificationEnabled && (
-              <View style={styles.notificationList}>
-                {appNotifications.length ? appNotifications.slice(0, 30).map((notification: any) => (
-                  <TouchableOpacity key={notification.id} style={[styles.inAppNotification, !notification.is_read && styles.inAppNotificationUnread]} onPress={async () => {
-                    if (notification.is_read || !authToken) return;
-                    setAppNotifications((current) => current.map((item: any) => item.id === notification.id ? { ...item, is_read: true } : item));
-                    await requestJson(`/api/notifications/${notification.id}/read/`, { method: 'PATCH', body: JSON.stringify({ is_read: true }) }, authToken);
-                  }}>
-                    <Text style={styles.inAppNotificationTitle}>{notification.title}</Text>
-                    <Text style={styles.inAppNotificationMessage}>{notification.message}</Text>
-                  </TouchableOpacity>
-                )) : <Text style={styles.profileDetailBody}>No notifications yet. New arrivals and order updates will appear here.</Text>}
-              </View>
-            )}
-            <TouchableOpacity style={styles.primaryButton} onPress={() => { Alert.alert('Notifications saved', notificationEnabled ? 'You will receive live order updates and new-arrival announcements.' : 'Notifications are turned off.'); setProfileRoute('profile'); }}>
-              <Text style={styles.primaryButtonText}>Save preferences</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -3356,6 +3650,8 @@ export default function App() {
             <TextInput style={styles.inputField} value={profileDraft.email} onChangeText={(value) => setProfileDraft((prev) => ({ ...prev, email: value }))} placeholder="Email" keyboardType="email-address" autoCapitalize="none" placeholderTextColor="#9CA3AF" />
             <Text style={styles.infoLabel}>Phone number</Text>
             <TextInput style={styles.inputField} value={profileDraft.phone_number} onChangeText={(value) => setProfileDraft((prev) => ({ ...prev, phone_number: value }))} placeholder="Phone number" keyboardType="phone-pad" placeholderTextColor="#9CA3AF" />
+            <Text style={styles.infoLabel}>Salon name</Text>
+            <TextInput style={styles.inputField} value={profileDraft.salon_name} onChangeText={(value) => setProfileDraft((prev) => ({ ...prev, salon_name: value }))} placeholder="Salon name" placeholderTextColor="#9CA3AF" />
             <TouchableOpacity style={styles.primaryButton} onPress={saveProfileDetails}>
               <Text style={styles.primaryButtonText}>Save changes</Text>
             </TouchableOpacity>
@@ -3404,33 +3700,6 @@ export default function App() {
             {passwordMessage ? <Text style={styles.passwordMessage}>{passwordMessage}</Text> : null}
             <TouchableOpacity style={styles.primaryButton} onPress={savePassword}>
               <Text style={styles.primaryButtonText}>Update password</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      );
-    }
-
-    if (profileRoute === 'notification_settings') {
-      return (
-        <View style={styles.profilePage}>
-          <View style={styles.profileHeaderBlock}>
-            <View style={styles.profileHeaderRow}>
-              <View style={styles.profileHeaderBack} />
-              <Text style={styles.profileHeaderTitle}>Notification Settings</Text>
-              <View style={styles.profileHeaderBack} />
-            </View>
-            <Text style={styles.profileHeaderScreenTitle}>Choose what you want to hear about</Text>
-          </View>
-          <View style={styles.profileDetailCard}>
-            <View style={styles.notificationCard}>
-              <View style={styles.notificationTextArea}>
-                <Text style={styles.infoValue}>Order updates</Text>
-                <Text style={styles.profileDetailBody}>Order confirmations, delivery updates, and rider alerts.</Text>
-              </View>
-              <Switch value={notificationEnabled} onValueChange={setNotificationEnabled} thumbColor={notificationEnabled ? '#F5821F' : '#FFFFFF'} trackColor={{ false: '#D1D5DB', true: '#FDC38B' }} />
-            </View>
-            <TouchableOpacity style={styles.primaryButton} onPress={() => { Alert.alert('Saved', 'Your notification preference has been saved.'); setProfileRoute('profile'); }}>
-              <Text style={styles.primaryButtonText}>Save settings</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -3498,10 +3767,10 @@ export default function App() {
             <Text style={styles.profileHeaderScreenTitle}>Choose how you’d like to pay</Text>
           </View>
           <View style={styles.profileDetailCard}>
-            <Text style={styles.profileDetailBody}>Select your preferred payment option. We support Cash on Delivery and mobile money; bank transfers may be available depending on your region.</Text>
+            <Text style={styles.profileDetailBody}>Only Cash on Delivery is available right now for confirmed salon orders.</Text>
 
-            {['Cash on delivery', 'MTN Mobile Money', 'Airtel Money', 'Bank transfer'].map((label) => (
-              <TouchableOpacity key={label} style={[styles.menuRow, paymentMethod === label && { backgroundColor: '#FEF3E8' }]} onPress={() => setPaymentMethod(label)}>
+            {['Cash on delivery'].map((label) => (
+              <TouchableOpacity key={label} style={[styles.menuRow, paymentMethod === label && { backgroundColor: '#FEF3E8' }]} onPress={() => setPaymentMethod('Cash on delivery')}>
                 <View style={styles.menuLabelWrap}>
                   <View style={styles.menuIconShell}><Text style={styles.menuIcon}>{paymentMethod === label ? '◉' : '○'}</Text></View>
                   <Text style={styles.menuLabel}>{label}</Text>
@@ -3514,10 +3783,7 @@ export default function App() {
               {savingPaymentMethod ? <ActivityIndicator color="#FFFFFF" /> : <Text style={styles.primaryButtonText}>Save payment method</Text>}
             </TouchableOpacity>
 
-            <Text style={[styles.profileDetailBody, { marginTop: 12, fontSize: 13 }]}>Note: To fully enable mobile money or bank transfers, ensure your account profile includes a verified phone number and that the backend has the corresponding payment provider keys configured.</Text>
-            <TouchableOpacity style={[styles.secondaryButton, { marginTop: 10 }]} onPress={() => Linking.openURL('https://glow.example.com/payments') }>
-              <Text style={styles.secondaryButtonText}>Learn about supported payment methods</Text>
-            </TouchableOpacity>
+            <Text style={[styles.profileDetailBody, { marginTop: 12, fontSize: 13 }]}>Cash on delivery is the active method for orders placed from this account.</Text>
 
             <TouchableOpacity style={[styles.primaryButton, { marginTop: 14 }]} onPress={() => setProfileRoute('profile')}>
               <Text style={styles.primaryButtonText}>Back to Profile</Text>
@@ -3687,7 +3953,6 @@ export default function App() {
             { label: 'Change Password', route: 'change_password', icon: '🔒' },
             { label: 'Payment Methods', route: 'payment_methods', icon: '▣' },
             { label: 'Addresses', route: 'addresses', icon: '📍' },
-            { label: 'Notification Settings', route: 'notification_settings', icon: '🔔' },
             { label: 'Help & Support', route: 'help', icon: '❓' },
             { label: 'About Glow', route: 'about', icon: 'ⓘ' },
           ].map((item) => (
@@ -3799,27 +4064,36 @@ const renderHomeBody = () => {
 
     // Keep the curated rails separate: the same item never appears in more than one.
     const assignedHomeProductKeys = new Set<string>();
+    const allCatalogProducts = [...products];
+    const searchQuery = (searchTerm || '').trim().toLowerCase();
     const bestSellingProducts = takeUnassignedProducts(
-      [...products].sort((a, b) => {
+      [...allCatalogProducts].filter((product) => matchesProductSearch(product, searchQuery)).sort((a, b) => {
         const salesDifference = salesCountFor(b) - salesCountFor(a);
         if (salesDifference) return salesDifference;
         return new Date(b?.updated_at || b?.created_at || 0).getTime() - new Date(a?.updated_at || a?.created_at || 0).getTime();
       }),
       assignedHomeProductKeys,
-      15,
+      Math.max(12, Math.ceil(allCatalogProducts.length * 0.35)),
     );
     const dealsOfTheDay = takeUnassignedProducts(
-      [...products].sort((a, b) => profitFor(b) - profitFor(a)),
+      [...allCatalogProducts].filter((product) => matchesProductSearch(product, searchQuery)).sort((a, b) => profitFor(b) - profitFor(a)),
       assignedHomeProductKeys,
-      15,
+      Math.max(12, Math.ceil(allCatalogProducts.length * 0.35)),
     );
     const freshPicks = takeUnassignedProducts(
-      [...products].sort((a, b) => profitFor(a) - profitFor(b)),
+      [...allCatalogProducts].filter((product) => matchesProductSearch(product, searchQuery)).sort((a, b) => profitFor(a) - profitFor(b)),
       assignedHomeProductKeys,
-      15,
+      Math.max(12, Math.ceil(allCatalogProducts.length * 0.35)),
     );
 
-    
+    const remainingFeaturedProducts = allCatalogProducts.filter((product) => {
+      const key = productKey(product);
+      return key && !assignedHomeProductKeys.has(key);
+    });
+
+    const discoverMorePool = [...mixedCategoryProducts, ...remainingFeaturedProducts];
+    const discoverMoreUnique = Array.from(new Map(discoverMorePool.map((item) => [productKey(item) || `${Math.random()}`, item])).values());
+    const discoverMoreProducts = discoverMoreUnique.filter((item) => item && productKey(item) && matchesProductSearch(item, searchQuery));
 
     const heroBanner = banners[0];
     // Force the hero background to the given Cloudinary image (ignore banner overrides)
@@ -3989,10 +4263,10 @@ const renderHomeBody = () => {
 
           <View style={styles.sectionHeader}>
             <Text style={styles.sectionTitle}>Discover more</Text>
-            <Text style={styles.viewAll}>{mixedCategoryProducts.length} items</Text>
+            <Text style={styles.viewAll}>{discoverMoreProducts.length} items</Text>
           </View>
           <View style={styles.productGrid}>
-            {mixedCategoryProducts.map((item: any, index: number) => {
+            {discoverMoreProducts.map((item: any, index: number) => {
               const isSaved = wishlist.some((entry: any) => entry.id === item.id);
               const outOfStock = isProductOutOfStock(item);
               return (
@@ -4046,12 +4320,12 @@ const renderHomeBody = () => {
     const heroBanner = banners[0];
     if (activeTab === 'Categories') return renderCategoriesScreen();
     if (activeTab === 'Orders') return renderOrdersScreen();
-    if (activeTab === 'Profile' || activeTab === 'Cart') return renderProfileScreen();
+    if (activeTab === 'Settings' || activeTab === 'Profile' || activeTab === 'Cart') return renderProfileScreen();
     return renderHomeBody();
   };
 
   const detailGallery = selectedProduct ? getProductImageUrls(selectedProduct) : [];
-  const activeDetailImage = detailGallery[selectedProductImageIndex] || detailGallery[0] || DEFAULT_PRODUCT_IMAGE;
+  const activeDetailImage = detailGallery[selectedProductImageIndex] || detailGallery[0] || '';
   const isSelectedWishlisted = selectedProduct ? wishlist.some((item: any) => item.id === selectedProduct.id) : false;
   const selectedProductQty = selectedProduct ? (cartQuantities[selectedProduct.id] || 0) : 0;
   const selectedProductOutOfStock = selectedProduct ? isProductOutOfStock(selectedProduct) : false;
@@ -4077,8 +4351,8 @@ const renderHomeBody = () => {
 
   return (
     <SafeAreaProvider>
-      <StatusBar barStyle={['Home', 'Categories', 'Orders', 'Profile', 'Cart'].includes(activeTab) ? 'light-content' : 'dark-content'} backgroundColor={['Home', 'Categories', 'Orders', 'Profile', 'Cart'].includes(activeTab) ? '#01143F' : '#F8FAFC'} />
-      <SafeAreaView style={[styles.container, ['Home', 'Categories', 'Orders', 'Profile', 'Cart'].includes(activeTab) && styles.containerNavy]}>
+      <StatusBar barStyle={['Home', 'Categories', 'Orders', 'Settings', 'Profile', 'Cart'].includes(activeTab) ? 'light-content' : 'dark-content'} backgroundColor={['Home', 'Categories', 'Orders', 'Settings', 'Profile', 'Cart'].includes(activeTab) ? '#01143F' : '#F8FAFC'} />
+      <SafeAreaView style={[styles.container, ['Home', 'Categories', 'Orders', 'Settings', 'Profile', 'Cart'].includes(activeTab) && styles.containerNavy]}>
         <View style={styles.screenRoot}>
           {activeTab === 'Home' ? (
           <View style={styles.homeScreenRoot}>
@@ -4136,11 +4410,11 @@ const renderHomeBody = () => {
                 </TouchableOpacity>
               </View>
               <ScrollView contentContainerStyle={styles.detailScrollContent} showsVerticalScrollIndicator={false}>
-                <Image source={{ uri: activeDetailImage }} style={styles.detailHeroImage} resizeMode="contain" />
+                <CatalogImage uri={activeDetailImage} style={styles.detailHeroImage} />
                 <View style={styles.detailGalleryRow}>
                   {detailGallery.map((image, index) => (
                     <TouchableOpacity key={`${image}-${index}`} style={[styles.detailThumbCard, index === selectedProductImageIndex && styles.detailThumbCardActive]} onPress={() => setSelectedProductImageIndex(index)}>
-                      <Image source={{ uri: image }} style={styles.detailThumbImage} />
+                      <CatalogImage uri={image} style={styles.detailThumbImage} />
                     </TouchableOpacity>
                   ))}
                 </View>
@@ -4215,7 +4489,7 @@ const renderHomeBody = () => {
                   if (tab.key === 'Cart') {
                     setProfileRoute('cart');
                   }
-                  if (tab.key === 'Profile') {
+                  if (tab.key === 'Settings') {
                     setProfileRoute('profile');
                   }
                   setActiveTab(tab.key);
@@ -4293,16 +4567,17 @@ const styles = StyleSheet.create({
   authToggleText: { color: '#475569', fontSize: 13 },
   authToggleLink: { color: '#2563EB', fontWeight: '700', marginLeft: 6 },
   // Header: deep navy background with white logo and icons
-  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingTop: 18, paddingBottom: 18, backgroundColor: '#01143F', borderBottomWidth: 0 },
+  topBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 14, paddingTop: 14, paddingBottom: 12, backgroundColor: '#01143F', borderBottomWidth: 0 },
   // Icon button uses subtle translucent white on navy header
-  iconButton: { width: 44, height: 44, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.06)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', elevation: 0, shadowColor: '#000', shadowOpacity: 0.02, shadowRadius: 2, shadowOffset: { width: 0, height: 1 } },
-  headerIconText: { fontSize: 24, color: '#FFFFFF' },
-  logoBox: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 6 },
-  logoTextBlock: { flexDirection: 'row', alignItems: 'center', position: 'relative', backgroundColor: 'transparent', paddingHorizontal: 6, paddingVertical: 4, borderRadius: 16 },
-  // Slimmer logo container to match reference
-  logoImageWrapper: { width: 140, height: 48, borderRadius: 12, overflow: 'hidden', backgroundColor: 'transparent' },
+  iconButton: { width: 40, height: 40, borderRadius: 12, backgroundColor: 'rgba(255,255,255,0.06)', justifyContent: 'center', alignItems: 'center', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)', elevation: 0, shadowColor: '#000', shadowOpacity: 0.02, shadowRadius: 2, shadowOffset: { width: 0, height: 1 } },
+  headerIconText: { fontSize: 22, color: '#FFFFFF' },
+  logoBox: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4 },
+  logoTextBlock: { flexDirection: 'row', alignItems: 'center', position: 'relative', backgroundColor: 'transparent', paddingHorizontal: 4, paddingVertical: 2, borderRadius: 12 },
+  // Slightly larger logo container for the increased header
+  logoImageWrapper: { width: 78, height: 30, borderRadius: 8, overflow: 'hidden', backgroundColor: 'transparent' },
   logoImage: { width: '100%', height: '100%', resizeMode: 'cover' },
-  tagline: { marginTop: 4, color: '#E6EEF6', fontSize: 10, fontWeight: '700', letterSpacing: 1.7, textTransform: 'uppercase' },
+  productPlaceholder: { backgroundColor: '#F3F4F6', justifyContent: 'center', alignItems: 'center' },
+  tagline: { marginTop: 2, color: '#E6EEF6', fontSize: 8, fontWeight: '700', letterSpacing: 1.1, textTransform: 'uppercase' },
   sidebarToggleButton: { paddingHorizontal: 8, paddingVertical: 6, borderRadius: 10, backgroundColor: 'transparent', justifyContent: 'center', alignItems: 'center' },
   sidebarToggleText: { color: '#FFFFFF', fontSize: 13, fontWeight: '700' },
   logoBadge: { position: 'absolute', top: -7, right: 12, width: 14, height: 14, borderRadius: 7, backgroundColor: '#2563EB' },
@@ -4386,8 +4661,8 @@ const styles = StyleSheet.create({
   summaryRowStrong: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 4, paddingTop: 8, borderTopWidth: 1, borderTopColor: '#E5E7EB' },
   summaryLabelStrong: { color: '#1B2A4A', fontSize: 14, fontWeight: '800' },
   summaryValueStrong: { color: '#F5821F', fontSize: 15, fontWeight: '800' },
-  // Floating, white search bar that sits below the navy header
-  searchBar: { flexDirection: 'row', alignItems: 'center', marginBottom: 14, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 999, backgroundColor: '#FFFFFF', borderWidth: 0, shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 14, shadowOffset: { width: 0, height: 6 }, elevation: 6 },
+  // Floating, white search bar that sits below the navy header (reduced size)
+  searchBar: { flexDirection: 'row', alignItems: 'center', marginBottom: 10, paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, backgroundColor: '#FFFFFF', borderWidth: 0, shadowColor: '#000', shadowOpacity: 0.12, shadowRadius: 10, shadowOffset: { width: 0, height: 4 }, elevation: 4 },
   homeScreenRoot: { flex: 1, backgroundColor: '#01143F' },
   homeTopStatic: { backgroundColor: '#01143F', zIndex: 2 },
   homeScroll: { flex: 1, backgroundColor: 'transparent' },
@@ -4399,7 +4674,7 @@ const styles = StyleSheet.create({
   checkoutNoticeSuccess: { backgroundColor: '#EAFBF2', borderWidth: 1, borderColor: '#BFE9CF' },
   checkoutNoticeError: { backgroundColor: '#FFF1F2', borderWidth: 1, borderColor: '#FECACA' },
   checkoutNoticeText: { color: '#1B2A4A', fontSize: 13, fontWeight: '700' },
-  searchInput: { flex: 1, color: '#111827', fontSize: 14, paddingVertical: 0 },
+  searchInput: { flex: 1, color: '#111827', fontSize: 13, paddingVertical: 0 },
   // Orange search action to match accent color
   searchButton: { marginLeft: 8, width: 42, height: 42, borderRadius: 21, backgroundColor: '#F5821F', justifyContent: 'center', alignItems: 'center' },
   searchButtonIcon: { fontSize: 18, color: '#FFFFFF' },
@@ -4466,10 +4741,17 @@ const styles = StyleSheet.create({
   productGridCartButtonDisabled: { backgroundColor: '#94A3B8' },
   productGridCartButtonText: { color: '#FFFFFF', fontSize: 12, fontWeight: '800' },
   categoryIntroCard: { backgroundColor: '#F8FAFC', borderRadius: 18, padding: 12, marginBottom: 10, borderWidth: 1, borderColor: '#E5E7EB' },
-  categoryIntroTextBlock: { flex: 1 },
+  categoryIntroHeaderRow: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', gap: 10 },
+  categoryIntroTextBlock: { flex: 1, paddingRight: 8 },
   categoryIntroText: { marginTop: 4, color: '#6B7280', fontSize: 12, lineHeight: 18 },
-  categoryIntroChip: { alignSelf: 'flex-start', backgroundColor: '#2563EB', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6, marginTop: 8 },
+  categoryIntroMetaWrap: { width: 150, alignItems: 'flex-end' },
+  categoryIntroSearchBox: { width: '100%', backgroundColor: '#FFFFFF', borderRadius: 10, borderWidth: 1, borderColor: '#E5E7EB', paddingHorizontal: 10, paddingVertical: 8, marginBottom: 8 },
+  categoryIntroSearchInput: { color: '#111827', fontSize: 12, paddingVertical: 0 },
+  categoryIntroChip: { alignSelf: 'flex-end', backgroundColor: '#2563EB', borderRadius: 8, paddingHorizontal: 10, paddingVertical: 6 },
   categoryIntroChipText: { color: '#FFFFFF', fontSize: 11, fontWeight: '800' },
+  categoryIntroChipDropdown: { alignSelf: 'flex-end', flexDirection: 'row', alignItems: 'center', backgroundColor: '#2563EB', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 6 },
+  categoryIntroChipIcon: { marginRight: 6, fontSize: 14 },
+  categoryIntroChipButton: { paddingHorizontal: 6 },
   categoryFilterRow: { flexDirection: 'row', flexWrap: 'wrap', marginBottom: 10 },
   categoryFilterChip: { marginRight: 8, marginBottom: 8, paddingHorizontal: 12, paddingVertical: 8, borderRadius: 8, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F0' },
   categoryFilterChipActive: { backgroundColor: '#EFF6FF', borderColor: '#2563EB' },
@@ -4545,14 +4827,14 @@ const styles = StyleSheet.create({
   searchBarCategories: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 16, marginTop: 12, marginBottom: 12, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 999, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E5E7EB' },
   headerActionsRow: { flexDirection: 'row', alignItems: 'center' },
   categorySplitView: { flex: 1, flexDirection: 'row' },
-  categorySidebar: { width: 110, flexGrow: 0, backgroundColor: '#FFFFFF', borderRightWidth: 1, borderRightColor: '#E2E8F0' },
+  categorySidebar: { width: 150, flexGrow: 0, backgroundColor: '#FFFFFF', borderRightWidth: 1, borderRightColor: '#E2E8F0' },
   categorySidebarContent: { paddingVertical: 8 },
-  sidebarRow: { paddingVertical: 10, paddingHorizontal: 10, flexDirection: 'row', alignItems: 'center', borderLeftWidth: 3, borderLeftColor: 'transparent' },
+  sidebarRow: { paddingVertical: 10, paddingHorizontal: 8, flexDirection: 'row', alignItems: 'center', borderLeftWidth: 3, borderLeftColor: 'transparent', minHeight: 52 },
   sidebarRowActive: { backgroundColor: '#EFF6FF', borderLeftColor: '#2563EB' },
-  sidebarIconBadge: { width: 28, height: 28, borderRadius: 8, justifyContent: 'center', alignItems: 'center', marginRight: 8 },
+  sidebarIconBadge: { width: 30, height: 30, borderRadius: 8, justifyContent: 'center', alignItems: 'center', marginRight: 8, overflow: 'hidden', flexShrink: 0 },
   sidebarIconText: { marginRight: 8, fontSize: 16 },
-  sidebarLabel: { color: '#64748B', fontSize: 11, fontWeight: '600' },
-  sidebarLabelActive: { color: '#2563EB', fontWeight: '700' },
+  sidebarLabel: { flexShrink: 1, color: '#64748B', fontSize: 12, fontWeight: '700', lineHeight: 15, maxWidth: 92 },
+  sidebarLabelActive: { color: '#2563EB', fontWeight: '800' },
   categoryContentArea: { flex: 1, backgroundColor: '#F8FAFC', padding: 12 },
   gridContent: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', paddingBottom: 16 },
   emptyStateCard: { width: '100%', backgroundColor: '#F7F7F9', borderRadius: 18, padding: 18, marginTop: 6, borderWidth: 1, borderColor: '#E5E7EB' },
@@ -4621,6 +4903,10 @@ const styles = StyleSheet.create({
   secondaryButton: { marginTop: 10, borderWidth: 1, borderColor: '#F5821F', borderRadius: 999, paddingVertical: 10, alignItems: 'center' },
   secondaryButtonText: { color: '#F5821F', fontWeight: '700', fontSize: 13 },
   inputField: { borderWidth: 1, borderColor: '#DCE5F1', borderRadius: 14, paddingHorizontal: 14, paddingVertical: 13, marginTop: 8, color: '#0F172A', fontSize: 14, backgroundColor: '#F8FAFC' },
+  passwordInputRow: { flexDirection: 'row', alignItems: 'center', marginTop: 8 },
+  passwordInput: { flex: 1, marginTop: 0 },
+  passwordToggleButton: { marginLeft: 8, paddingHorizontal: 12, paddingVertical: 10, borderRadius: 10, backgroundColor: '#FFF3E9', borderWidth: 1, borderColor: '#F8C9A2' },
+  passwordToggleText: { color: '#D8650D', fontSize: 12, fontWeight: '800' },
   locationLabel: { color: '#64748B', fontSize: 12, fontWeight: '700', marginTop: 12, marginBottom: 4 },
   locationSelect: { minHeight: 50, borderWidth: 1, borderColor: '#DCE5F1', borderRadius: 14, paddingHorizontal: 14, backgroundColor: '#F8FAFC', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   locationSelectValue: { color: '#0F172A', fontSize: 14, fontWeight: '600' },
@@ -4651,12 +4937,12 @@ const styles = StyleSheet.create({
   detailMeta: { fontSize: 13, color: '#6B7280', marginTop: 6 },
   detailTotal: { fontSize: 20, fontWeight: '800', color: '#1B2A4A', marginTop: 12 },
   profilePage: { flex: 1, backgroundColor: '#F7F7F9', paddingBottom: 24 },
-  profileHeaderBlock: { paddingHorizontal: 18, paddingTop: 20, paddingBottom: 48, backgroundColor: '#01143F', borderBottomLeftRadius: 32, borderBottomRightRadius: 32, minHeight: 252 },
+  profileHeaderBlock: { paddingHorizontal: 18, paddingTop: 12, paddingBottom: 24, backgroundColor: '#01143F', borderBottomLeftRadius: 32, borderBottomRightRadius: 32, minHeight: 126 },
   profileHeaderRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   profileHeaderBack: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(255,255,255,0.12)', justifyContent: 'center', alignItems: 'center' },
   profileHeaderBackText: { color: '#FFFFFF', fontSize: 20, fontWeight: '700' },
-  profileHeaderTitle: { color: '#FFFFFF', fontSize: 18, fontWeight: '800' },
-  profileHeaderScreenTitle: { color: '#FFFFFF', fontSize: 26, fontWeight: '800', marginTop: 18, letterSpacing: -0.5 },
+  profileHeaderTitle: { color: '#FFFFFF', fontSize: 16, fontWeight: '800' },
+  profileHeaderScreenTitle: { color: '#FFFFFF', fontSize: 18, fontWeight: '800', marginTop: 10, letterSpacing: -0.5 },
   profileHeaderSubtitle: { color: '#B8C8E5', fontSize: 13, marginTop: 6, lineHeight: 19 },
   profileAuthLogoRow: { flexDirection: 'row', alignItems: 'center', marginTop: 20 },
   profileAuthLogo: { width: 38, height: 38, borderRadius: 12, marginRight: 10, backgroundColor: '#FFFFFF' },
@@ -4732,7 +5018,13 @@ const styles = StyleSheet.create({
   logoutButton: { marginTop: 16, marginHorizontal: 16, backgroundColor: '#FF6400', borderRadius: 10, paddingVertical: 15, alignItems: 'center', shadowColor: '#F5821F', shadowOpacity: 0.25, shadowRadius: 8, shadowOffset: { width: 0, height: 3 }, elevation: 3 },
   logoutButtonText: { color: '#FFFFFF', fontWeight: '800', fontSize: 15 },
   checkoutIntroCard: { backgroundColor: '#FFF7ED', borderRadius: 16, padding: 12, marginBottom: 16, borderWidth: 1, borderColor: '#FDE3C5' },
-  checkoutIntroTitle: { color: '#1B2A4A', fontSize: 14, fontWeight: '800', marginBottom: 4 },
+  checkoutIntroTitle: { color: '#1B2A4A', fontSize: 14, fontWeight: '800', marginBottom: 8 },
+  checkoutItemsList: { gap: 8, marginBottom: 8 },
+  checkoutItemRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFFFF', borderRadius: 12, padding: 8, borderWidth: 1, borderColor: '#FDE3C5' },
+  checkoutItemImage: { width: 42, height: 42, borderRadius: 10, marginRight: 10, backgroundColor: '#F8FAFC' },
+  checkoutItemTextWrap: { flex: 1 },
+  checkoutItemName: { color: '#1B2A4A', fontSize: 12, fontWeight: '700' },
+  checkoutItemMeta: { color: '#64748B', fontSize: 11, marginTop: 2 },
   checkoutIntroText: { color: '#6B7280', fontSize: 12, lineHeight: 18 },
   profileDetailCard: { marginTop: 20, marginHorizontal: 16, backgroundColor: '#FFFFFF', borderRadius: 20, padding: 18, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
   profileAuthCard: { marginTop: -26, marginHorizontal: 16, backgroundColor: '#FFFFFF', borderRadius: 24, padding: 20, shadowColor: '#1B2A4A', shadowOpacity: 0.14, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 5 },

@@ -123,10 +123,15 @@
             <p class="subtitle">Professional receipts and order records for your salon business.</p>
           </div>
         </div>
-        <div>
-          <p class="summary-item"><strong>Receipt</strong>{{ receipt.receipt_number }}</p>
-          <p class="summary-item"><strong>Date</strong>{{ receipt.receipt_date|date:"F j, Y" }}</p>
-          <p class="summary-item"><strong>Order</strong>{{ order.order_number }}</p>
+        <div style="display: flex; align-items: flex-start; gap: 16px;">
+          <div>
+            <p class="summary-item"><strong>Receipt</strong>{{ receipt.receipt_number }}</p>
+            <p class="summary-item"><strong>Date</strong>{{ receipt.receipt_date|date:"F j, Y" }}</p>
+            <p class="summary-item"><strong>Order</strong>{{ order.order_number }}</p>
+          </div>
+          <div style="width: 120px; height: 120px; padding: 8px; border: 1px solid #e2e8f0; border-radius: 12px; background: #ffffff;">
+            <img src="{{ qr_code_data_url }}" alt="Receipt QR code" style="width: 100%; height: 100%; object-fit: contain;" />
+          </div>
         </div>
       </div>
 

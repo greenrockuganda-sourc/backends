@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Download, Printer, Mail, Eye, PackageOpen } from 'lucide-react'
 import { fetchReceipts, sendReceiptEmail, downloadReceiptPdf } from '@/lib/api'
 import { Receipt } from '@/types'
-import Skeleton, { SkeletonTable } from '@/components/Skeleton'
+import { SkeletonTable } from '@/components/Skeleton'
 
 const formatCurrency = (value: number) => `UGX ${value.toFixed(2)}`
 

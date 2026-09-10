@@ -17,7 +17,7 @@
     },
     "android": {
       "package": "com.greenrockuganda.grow",
-      "versionCode": 5,
+      "versionCode": 9,
       "icon": "https://res.cloudinary.com/h78tlu47/image/upload/v1784708343/icon_sotujz.jpg",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
@@ -38,6 +38,12 @@
       "eas": {
         "projectId": "baf95bc3-d2a9-4a8e-b27a-199462f70c34"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/baf95bc3-d2a9-4a8e-b27a-199462f70c34"
     }
   }
 }

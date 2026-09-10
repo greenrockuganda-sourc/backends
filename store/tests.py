@@ -8,8 +8,8 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from .models import Brand, Category, Customer, Order, OrderItem, Product, Receipt, Recipe
-from .views import generate_product_sku
+from .models import Brand, Category, Customer, Delivery, Order, OrderItem, Product, Receipt, Recipe
+from .views import build_receipt_context, generate_product_sku
 
 User = get_user_model()
 
@@ -64,6 +64,144 @@ class ReportEmailAPITests(TestCase):
         self.assertEqual(response.data['message'], 'Report email queued.')
         self.assertEqual(len(mail.outbox), 1)
         self.assertIn('Weekly Sales Report', mail.outbox[0].subject)
+
+    def test_admin_can_fetch_category_report(self):
+        admin_user = User.objects.create_user(
+            email='admin2@example.com',
+            password='StrongPass123!',
+            first_name='Admin',
+            last_name='Reports',
+            phone_number='0706666000',
+            is_staff=True,
+            is_superuser=True,
+            role='Admin',
+        )
+        token = str(RefreshToken.for_user(admin_user).access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        category = Category.objects.create(category_name='Hair Care')
+        brand = Brand.objects.create(brand_name='Glow')
+        customer = Customer.objects.create(
+            user=User.objects.create_user(
+                email='customer@example.com',
+                password='StrongPass123!',
+                first_name='Marta',
+                last_name='Doe',
+                phone_number='0707777000',
+                is_active=True,
+            ),
+            salon_name='Marta Salon',
+        )
+        product = Product.objects.create(
+            category=category,
+            brand=brand,
+            product_name='Hair Serum',
+            buying_price='5000',
+            selling_price='8000',
+            quantity_in_stock=10,
+            sku='SKU-HAIR-SERUM',
+            barcode='BARCODE-HAIR-SERUM',
+        )
+        order = Order.objects.create(
+            customer=customer,
+            order_number='ORD-CAT-1001',
+            total_amount='8000.00',
+            delivery_fee='1000.00',
+            tax='400.00',
+            order_status='Delivered',
+            payment_status='Paid',
+        )
+        OrderItem.objects.create(
+            order=order,
+            product=product,
+            product_name='Hair Serum',
+            quantity=1,
+            unit_price='8000.00',
+            subtotal='8000.00',
+        )
+
+        response = self.client.get(reverse('admin_reports', kwargs={'report_type': 'categories'}))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('categories', response.data)
+        self.assertGreaterEqual(len(response.data['categories']), 1)
+        self.assertEqual(response.data['categories'][0]['category_name'], 'Hair Care')
+        self.assertGreaterEqual(float(response.data['categories'][0]['total_revenue']), 8000.0)
+
+
+class AdminReceiptListAPITests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+
+    def test_admin_receipt_list_includes_item_details(self):
+        admin_user = User.objects.create_user(
+            email='admin.receipts@example.com',
+            password='StrongPass123!',
+            first_name='Admin',
+            last_name='Receipts',
+            phone_number='0708888000',
+            is_staff=True,
+            is_superuser=True,
+            role='Admin',
+        )
+        token = str(RefreshToken.for_user(admin_user).access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        category = Category.objects.create(category_name='Hair Care')
+        brand = Brand.objects.create(brand_name='Glow')
+        customer = Customer.objects.create(
+            user=User.objects.create_user(
+                email='receipt.customer@example.com',
+                password='StrongPass123!',
+                first_name='Sarah',
+                last_name='Nansubuga',
+                phone_number='0709999000',
+                is_active=True,
+            ),
+            salon_name='Glow Studio',
+        )
+        product = Product.objects.create(
+            category=category,
+            brand=brand,
+            product_name='Hair Serum',
+            buying_price='5000',
+            selling_price='2500',
+            quantity_in_stock=8,
+            sku='SKU-RECEIPT-ITEM',
+            barcode='BARCODE-RECEIPT-ITEM',
+        )
+        order = Order.objects.create(
+            customer=customer,
+            order_number='ORD-RECEIPT-1001',
+            total_amount='2500.00',
+            delivery_fee='0.00',
+            tax='0.00',
+            order_status='Delivered',
+            payment_status='Paid',
+        )
+        OrderItem.objects.create(
+            order=order,
+            product=product,
+            product_name='Hair Serum',
+            quantity=1,
+            unit_price='2500.00',
+            subtotal='2500.00',
+        )
+        receipt = Receipt.objects.create(
+            order=order,
+            receipt_number='REC-TEST-001',
+            total_amount='2500.00',
+        )
+
+        response = self.client.get(reverse('admin_receipts'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('items', response.data[0])
+        self.assertEqual(response.data[0]['items'][0]['product_name'], 'Hair Serum')
+        self.assertEqual(response.data[0]['items'][0]['quantity'], 1)
+        self.assertEqual(float(response.data[0]['items'][0]['unit_price']), 2500.0)
+        self.assertEqual(float(response.data[0]['items'][0]['subtotal']), 2500.0)
+        self.assertEqual(response.data[0]['id'], receipt.id)
 
 
 class AuthAndProfileAPITests(TestCase):
@@ -572,6 +710,102 @@ class AdminDashboardAndProductAPITests(TestCase):
         self.assertGreaterEqual(mock_instance.send.call_count, 3)
         self.assertEqual(mock_email_cls.call_args_list[0].kwargs['to'], [customer_user.email])
 
+    @patch('store.views.urlopen')
+    @patch('store.views.EmailMessage')
+    def test_seller_product_status_updates_send_sms_and_email(self, mock_email_cls, mock_urlopen):
+        seller = User.objects.create_user(
+            email='seller@example.com',
+            password='StrongPass123!',
+            first_name='Seller',
+            last_name='User',
+            role='Seller',
+            phone_number='0701234567',
+            is_active=True,
+        )
+        seller_client = APIClient()
+        seller_client.credentials(HTTP_AUTHORIZATION=f"Bearer {str(RefreshToken.for_user(seller).access_token)}")
+
+        category = Category.objects.create(category_name='Seller Products')
+        brand = Brand.objects.create(brand_name='Seller Brand')
+        product = Product.objects.create(
+            category=category,
+            brand=brand,
+            product_name='Hair Serum',
+            buying_price='500',
+            selling_price='1500',
+            quantity_in_stock=3,
+            reorder_level=2,
+            sku='SKU-SELLER-STATUS',
+            status='Available',
+        )
+
+        mock_urlopen.return_value.__enter__.return_value.status = 200
+        mock_instance = mock_email_cls.return_value
+
+        with self.settings(TWILIO_ACCOUNT_SID='test_sid', TWILIO_AUTH_TOKEN='test_token', TWILIO_PHONE_NUMBER='+15551234567'):
+            response = seller_client.patch(reverse('product_detail', kwargs={'product_id': product.id}), {'status': 'Out of Stock'}, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        product.refresh_from_db()
+        self.assertEqual(product.status, 'Out of Stock')
+        self.assertTrue(mock_urlopen.called)
+        self.assertGreaterEqual(mock_instance.send.call_count, 1)
+        self.assertIn([seller.email], [call.kwargs['to'] for call in mock_email_cls.call_args_list])
+
+    @patch('store.views.urlopen')
+    @patch('store.views.EmailMessage')
+    def test_seller_can_broadcast_email_and_sms_to_all_customers(self, mock_email_cls, mock_urlopen):
+        seller = User.objects.create_user(
+            email='seller.broadcast@example.com',
+            password='StrongPass123!',
+            first_name='Seller',
+            last_name='Broadcast',
+            role='Seller',
+            phone_number='0702222000',
+            is_active=True,
+        )
+        seller_client = APIClient()
+        seller_client.credentials(HTTP_AUTHORIZATION=f"Bearer {str(RefreshToken.for_user(seller).access_token)}")
+
+        customer_one = User.objects.create_user(
+            email='cust1@example.com',
+            password='StrongPass123!',
+            first_name='Customer',
+            last_name='One',
+            role='Customer',
+            phone_number='0700000001',
+            is_active=True,
+        )
+        customer_two = User.objects.create_user(
+            email='cust2@example.com',
+            password='StrongPass123!',
+            first_name='Customer',
+            last_name='Two',
+            role='Customer',
+            phone_number='0700000002',
+            is_active=True,
+        )
+        Customer.objects.create(user=customer_one)
+        Customer.objects.create(user=customer_two)
+
+        mock_urlopen.return_value.__enter__.return_value.status = 200
+        mock_instance = mock_email_cls.return_value
+
+        with self.settings(TWILIO_ACCOUNT_SID='test_sid', TWILIO_AUTH_TOKEN='test_token', TWILIO_PHONE_NUMBER='+15551234567'):
+            response = seller_client.post(reverse('broadcast_notifications'), {
+                'title': 'Glow store update',
+                'message': 'New arrivals are now available.',
+                'channel': 'both',
+            }, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data['recipients'], 2)
+        self.assertTrue(mock_urlopen.called)
+        self.assertGreaterEqual(mock_instance.send.call_count, 2)
+        sent_recipients = [call.kwargs['to'][0] for call in mock_email_cls.call_args_list]
+        self.assertIn(customer_one.email, sent_recipients)
+        self.assertIn(customer_two.email, sent_recipients)
+
 
 @override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
 class AdminReceiptPDFAndEmailTests(TestCase):
@@ -640,6 +874,13 @@ class AdminReceiptPDFAndEmailTests(TestCase):
         )
         return receipt
 
+    def test_receipt_qr_code_uses_receipt_number(self):
+        receipt = self.create_test_receipt()
+        context = build_receipt_context(receipt)
+
+        self.assertEqual(context['qr_code_payload'], f'receipt:{receipt.receipt_number}')
+        self.assertIn('data:image/png;base64,', context['qr_code_data_url'])
+
     def test_admin_can_download_receipt_pdf(self):
         receipt = self.create_test_receipt()
         response = self.client.get(reverse('admin_receipt_pdf', kwargs={'receipt_id': receipt.id}))
@@ -660,6 +901,27 @@ class AdminReceiptPDFAndEmailTests(TestCase):
         content = b''.join(response.streaming_content)
         self.assertTrue(content)
 
+    def test_marking_delivery_as_delivered_updates_order_status(self):
+        receipt = self.create_test_receipt()
+        delivery = Delivery.objects.create(
+            order=receipt.order,
+            delivery_status='Out for Delivery',
+            delivery_person='Rider Joe',
+            delivery_phone='0701111111',
+        )
+
+        response = self.client.patch(
+            reverse('admin_delivery_detail', kwargs={'delivery_id': delivery.id}),
+            {'delivery_status': 'Delivered'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        delivery.refresh_from_db()
+        receipt.order.refresh_from_db()
+        self.assertEqual(delivery.delivery_status, 'Delivered')
+        self.assertEqual(receipt.order.order_status, 'Delivered')
+
     def test_admin_can_send_receipt_email_with_attachment(self):
         receipt = self.create_test_receipt()
         response = self.client.post(
@@ -667,8 +929,6 @@ class AdminReceiptPDFAndEmailTests(TestCase):
             {'email': 'customer@example.com'},
             format='json',
         )
-
-        
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data['message'], 'Email sent.')

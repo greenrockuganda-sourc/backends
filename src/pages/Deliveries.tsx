@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
-import { Check, MapPin, PackageOpen, FileText, Send } from 'lucide-react'
-import { fetchDeliveries, updateDelivery, createReceipt, downloadReceiptPdf, sendReceiptEmail } from '@/lib/api'
+import { MapPin, PackageOpen } from 'lucide-react'
+import { fetchDeliveries, updateDelivery, updateOrderStatus } from '@/lib/api'
 import { notifySuccess } from '@/lib/notify'
 import { Delivery } from '@/types'
 import Skeleton, { SkeletonTable } from '@/components/Skeleton'
@@ -75,82 +75,22 @@ export default function Deliveries({ token }: DeliveriesProps) {
     return label.charAt(0).toUpperCase() + label.slice(1)
   }
 
-  const handleMarkDelivered = async (id: string) => {
+  const handleMarkDelivered = async (delivery: { id: string; orderId?: string | number | null; status?: string }) => {
     setError(null)
     const original = deliveries
     try {
-      setBusyDelivery(id)
-      await updateDelivery(token, id, 'Delivered')
-      setDeliveries((currentDeliveries) => currentDeliveries.map((delivery) =>
-        delivery.id === id ? { ...delivery, status: 'delivered', receiptIssued: true } : delivery
+      setBusyDelivery(delivery.id)
+      await updateDelivery(token, delivery.id, 'Delivered')
+      if (delivery.orderId) {
+        await updateOrderStatus(token, String(delivery.orderId), 'Delivered')
+      }
+      setDeliveries((currentDeliveries) => currentDeliveries.map((item) =>
+        item.id === delivery.id ? { ...item, status: 'delivered', receiptIssued: true } : item
       ))
       notifySuccess('Delivery marked as delivered')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to mark delivered.')
       setDeliveries(original)
-    } finally {
-      setBusyDelivery(null)
-    }
-  }
-
-  const handleDownloadReceipt = async (delivery: Delivery) => {
-    setError(null)
-    try {
-      setBusyDelivery(delivery.id)
-      const resp = await createReceipt(token, delivery.orderId)
-      const pdfUrl: string | undefined = resp?.pdf_url
-      if (!pdfUrl) {
-        setError('Receipt not available.')
-        return
-      }
-
-      // extract receipt id from pdf_url like /api/admin/receipts/<id>/pdf/
-      const m = pdfUrl.match(/\/api\/admin\/receipts\/(\d+)\/pdf\//)
-      const receiptId = m ? m[1] : null
-      if (!receiptId) {
-        window.open(pdfUrl, '_blank')
-        return
-      }
-
-      const blob = await downloadReceiptPdf(token, receiptId)
-      const url = window.URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `receipt-${receiptId}.pdf`
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
-      window.URL.revokeObjectURL(url)
-      notifySuccess('Receipt downloaded successfully')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to download receipt.')
-    } finally {
-      setBusyDelivery(null)
-    }
-  }
-
-  const handleEmailReceipt = async (delivery: Delivery) => {
-    setError(null)
-    try {
-      setBusyDelivery(delivery.id)
-      const resp = await createReceipt(token, delivery.orderId)
-      const pdfUrl: string | undefined = resp?.pdf_url
-      if (!pdfUrl) {
-        setError('Receipt not available.')
-        return
-      }
-
-      const m = pdfUrl.match(/\/api\/admin\/receipts\/(\d+)\/pdf\//)
-      const receiptId = m ? m[1] : null
-      if (!receiptId) {
-        setError('Could not determine receipt ID.')
-        return
-      }
-
-      await sendReceiptEmail(token, receiptId)
-      notifySuccess('Receipt emailed successfully')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to email receipt.')
     } finally {
       setBusyDelivery(null)
     }
@@ -198,7 +138,6 @@ export default function Deliveries({ token }: DeliveriesProps) {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Driver</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Address</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Status</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Receipt</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider">Actions</th>
               </tr>
             </thead>
@@ -238,47 +177,15 @@ export default function Deliveries({ token }: DeliveriesProps) {
                         {formatDeliveryStatus(delivery.status)}
                       </span>
                     </td>
-                    <td data-label="Receipt" className="px-6 py-4 text-sm">
-                      {delivery.receiptIssued ? (
-                        <span className="flex items-center gap-1 text-blue-600">
-                          <Check size={16} />
-                          Issued
-                        </span>
-                      ) : (
-                        <span className="text-gray-500">Pending</span>
-                      )}
-                    </td>
                     <td data-label="Actions" className="px-6 py-4 text-sm">
                       <div className="flex flex-wrap items-center gap-2">
                         {!isDeliveryDelivered(delivery.status) && (
                           <button
-                            onClick={() => handleMarkDelivered(delivery.id)}
+                            onClick={() => handleMarkDelivered(delivery)}
                             disabled={busyDelivery === delivery.id}
                             className="bg-blue-600 text-white px-3 py-2 rounded text-xs hover:bg-blue-700 disabled:opacity-50 transition-colors flex items-center gap-1"
                           >
                             {busyDelivery === delivery.id ? 'Updating...' : 'Mark Delivered'}
-                          </button>
-                        )}
-                        {delivery.receiptIssued && (
-                          <button
-                            onClick={() => handleDownloadReceipt(delivery)}
-                            disabled={busyDelivery === delivery.id}
-                            className="text-blue-600 hover:text-blue-800 p-2 disabled:opacity-50"
-                            aria-label="Download receipt"
-                            title="Download receipt"
-                          >
-                            <FileText size={18} />
-                          </button>
-                        )}
-                        {delivery.receiptIssued && (
-                          <button
-                            onClick={() => handleEmailReceipt(delivery)}
-                            disabled={busyDelivery === delivery.id}
-                            className="text-blue-600 hover:text-blue-800 p-2 disabled:opacity-50"
-                            aria-label="Email receipt"
-                            title="Email receipt"
-                          >
-                            <Send size={18} />
                           </button>
                         )}
                       </div>

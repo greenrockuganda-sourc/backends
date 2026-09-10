@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Eye, Edit2, Download, PackageOpen, Search, Filter } from 'lucide-react'
-import { createReceipt, downloadReceiptPdf, fetchOrders, getOrderDetails, updateOrderStatus } from '@/lib/api'
+import { Download, Eye, Edit2, Filter, PackageOpen, Search } from 'lucide-react'
+import { fetchOrders, getOrderDetails, updateOrderStatus } from '@/lib/api'
 import { notifyError, notifySuccess } from '@/lib/notify'
 import { Order } from '@/types'
 import { SkeletonTable } from '@/components/Skeleton'
@@ -19,10 +19,10 @@ const getRangeStartDate = (range: RangeKey) => {
 }
 
 const readOrdersRangeFromUrl = (): RangeKey => {
-  if (typeof window === 'undefined') return '7d'
+  if (typeof window === 'undefined') return 'all'
   const params = new URLSearchParams(window.location.search)
   const value = params.get('ordersRange')
-  return validRanges.includes(value as RangeKey) ? (value as RangeKey) : '7d'
+  return validRanges.includes(value as RangeKey) ? (value as RangeKey) : 'all'
 }
 
 const statusColors: Record<string, string> = {
@@ -67,7 +67,6 @@ export default function Orders({ token }: OrdersProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false)
-  const [isDownloadingReceipt, setIsDownloadingReceipt] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('All')
 
@@ -306,41 +305,8 @@ export default function Orders({ token }: OrdersProps) {
     }
   }
 
-  const handleDownloadReceipt = async (orderId: string) => {
-    setError(null)
-    setIsDownloadingReceipt(true)
-    try {
-      const receipt = await createReceipt(token, orderId)
-      const receiptId = receipt?.id ?? receipt?.receipt_id ?? receipt?.receipt?.id
-      const pdfUrl = receipt?.pdf_url
-
-      let blob: Blob | null = null
-      if (pdfUrl) {
-        const resp = await fetch(pdfUrl, { headers: new Headers({ Authorization: `Bearer ${token}` }) })
-        if (!resp.ok) throw new Error(await resp.text() || 'Failed to download receipt PDF.')
-        blob = await resp.blob()
-      } else if (receiptId) {
-        blob = await downloadReceiptPdf(token, String(receiptId))
-      } else {
-        throw new Error('Receipt could not be created for this order.')
-      }
-
-      const url = window.URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `receipt-${orderId}.pdf`
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      window.URL.revokeObjectURL(url)
-      notifySuccess('Receipt downloaded successfully')
-    } catch (err) {
-        const message = sanitizeError(err instanceof Error ? err.message : err)
-        setError(message)
-        notifyError(message)
-    } finally {
-      setIsDownloadingReceipt(false)
-    }
+  const handleQuickStatusChange = async (orderId: string, nextStatus: 'Confirmed' | 'Out for Delivery') => {
+    await handleUpdateOrderStatus(orderId, nextStatus)
   }
 
   const closeOrderDetails = () => {
@@ -499,15 +465,30 @@ export default function Orders({ token }: OrdersProps) {
                     </td>
                     <td data-label="Date" className="px-6 py-4 text-sm text-gray-500">{order.date}</td>
                     <td data-label="Actions" className="px-6 py-4 text-sm">
-                      <div className="flex items-center gap-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {order.status !== 'confirmed' && (
+                          <button
+                            type="button"
+                            onClick={() => handleQuickStatusChange(order.id, 'Confirmed')}
+                            className="rounded bg-green-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-green-700"
+                          >
+                            Confirm
+                          </button>
+                        )}
+                        {order.status !== 'out for delivery' && order.status !== 'delivered' && order.status !== 'cancelled' && (
+                          <button
+                            type="button"
+                            onClick={() => handleQuickStatusChange(order.id, 'Out for Delivery')}
+                            className="rounded bg-blue-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+                          >
+                            Ship
+                          </button>
+                        )}
                         <button onClick={() => handleViewOrder(order.id)} className="text-blue-600 hover:text-blue-800 p-2" title="View">
                           <Eye size={18} />
                         </button>
                         <button onClick={() => handleViewOrder(order.id)} className="text-blue-600 hover:text-blue-800 p-2" title="Edit">
                           <Edit2 size={18} />
-                        </button>
-                        <button onClick={() => handleDownloadReceipt(order.id)} disabled={isDownloadingReceipt} className="text-blue-600 hover:text-blue-800 disabled:opacity-50 p-2" title="Download">
-                          <Download size={18} />
                         </button>
                       </div>
                     </td>
@@ -561,6 +542,25 @@ export default function Orders({ token }: OrdersProps) {
               </div>
 
               <div className="flex flex-wrap items-center gap-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                <label className="text-sm font-medium text-gray-700">Quick actions</label>
+                {selectedOrder.status !== 'confirmed' && (
+                  <button
+                    type="button"
+                    onClick={() => handleQuickStatusChange(selectedOrder.id, 'Confirmed')}
+                    className="rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
+                  >
+                    Confirm order
+                  </button>
+                )}
+                {selectedOrder.status !== 'out for delivery' && selectedOrder.status !== 'delivered' && selectedOrder.status !== 'cancelled' && (
+                  <button
+                    type="button"
+                    onClick={() => handleQuickStatusChange(selectedOrder.id, 'Out for Delivery')}
+                    className="rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                  >
+                    Ship order
+                  </button>
+                )}
                 <label className="text-sm font-medium text-gray-700">Update status</label>
                 <select
                   value={statusDraft}
@@ -579,13 +579,6 @@ export default function Orders({ token }: OrdersProps) {
                   className="rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {isUpdatingStatus ? 'Saving...' : 'Save status'}
-                </button>
-                <button
-                  onClick={() => handleDownloadReceipt(selectedOrder.id)}
-                  disabled={isDownloadingReceipt}
-                  className="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {isDownloadingReceipt ? 'Preparing...' : 'Download receipt'}
                 </button>
               </div>
 

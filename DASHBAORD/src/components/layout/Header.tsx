@@ -31,8 +31,8 @@ export default function Header({ onMenuClick, user, onLogout, onProfileClick }: 
             <Menu size={22} className="text-white" />
           </button>
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
-            <div className="h-9 w-9 sm:h-12 sm:w-12 rounded-lg bg-white/10 p-1 flex-shrink-0">
-              <img src="https://res.cloudinary.com/h78tlu47/image/upload/v1784708343/icon_sotujz.jpg" alt="Glow logo" className="h-full w-full rounded-lg object-contain" />
+            <div className="h-9 w-9 sm:h-12 sm:w-12 overflow-hidden rounded-lg bg-white/10 p-1 flex-shrink-0">
+              <img src="https://res.cloudinary.com/h78tlu47/image/upload/v1784708343/icon_sotujz.jpg" alt="Glow logo" className="h-full w-full rounded-md object-cover" />
             </div>
             <div className="min-w-0">
               <h1 className="truncate text-base sm:text-lg md:text-2xl font-bold text-white">Glow</h1>

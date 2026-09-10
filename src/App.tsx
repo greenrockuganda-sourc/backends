@@ -5,7 +5,6 @@ import Dashboard from '@/pages/Dashboard'
 import Products from '@/pages/Products'
 import Orders from '@/pages/Orders'
 import Deliveries from '@/pages/Deliveries'
-import Receipts from '@/pages/Receipts'
 import Reports from '@/pages/Reports'
 import Settings from '@/pages/Settings'
 import Login from '@/pages/Login'
@@ -13,10 +12,10 @@ import { fetchProfile, registerAuthTokenUpdater } from '@/lib/api'
 import { ToastContainer } from 'react-toastify'
 import 'react-toastify/dist/ReactToastify.css'
 import { UserProfile } from '@/types'
-import { Home, Package, ShoppingCart, Truck, FileText, BarChart3, Settings as SettingsIcon } from 'lucide-react'
+import { Home, Package, ShoppingCart, Truck, BarChart3, Settings as SettingsIcon } from 'lucide-react'
 import NotificationSystem, { useNotifications } from '@/components/NotificationSystem'
 
-type Page = 'dashboard' | 'products' | 'orders' | 'deliveries' | 'receipts' | 'reports' | 'settings'
+type Page = 'dashboard' | 'products' | 'orders' | 'deliveries' | 'reports' | 'settings'
 type MobileNavId = Page | 'more'
 
 const mobileNavItems: { id: MobileNavId; label: string; icon: typeof Home }[] = [
@@ -133,8 +132,6 @@ export default function App() {
         return <Orders token={accessToken} />
       case 'deliveries':
         return <Deliveries token={accessToken} />
-      case 'receipts':
-        return <Receipts token={accessToken} />
       case 'reports':
         return <Reports token={accessToken} />
       case 'settings':
@@ -146,7 +143,7 @@ export default function App() {
 
   const isMobileNavActive = (id: MobileNavId) => {
     if (id === 'more') {
-      return ['receipts', 'reports', 'settings'].includes(currentPage)
+      return ['reports', 'settings'].includes(currentPage)
     }
     return currentPage === id
   }
@@ -209,9 +206,8 @@ export default function App() {
           <div className="absolute bottom-0 left-0 right-0 bg-white rounded-t-2xl p-4 pb-8 slide-up safe-bottom">
             <div className="w-12 h-1.5 bg-gray-300 rounded-full mx-auto mb-4" />
             <p className="text-sm font-semibold text-gray-900 mb-3 px-2">More options</p>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2">
               {[
-                { id: 'receipts' as Page, label: 'Receipts', icon: FileText },
                 { id: 'reports' as Page, label: 'Reports', icon: BarChart3 },
                 { id: 'settings' as Page, label: 'Settings', icon: SettingsIcon },
               ].map((item) => {

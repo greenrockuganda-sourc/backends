@@ -2,10 +2,9 @@
 
 import { Order } from '@/lib/types'
 import { Button } from '@/components/ui/button'
-import { X, FileText } from 'lucide-react'
+import { X } from 'lucide-react'
 import { ordersApi } from '@/lib/api'
 import { useState } from 'react'
-import { ReceiptTemplate } from '@/components/receipts/receipt-template'
 
 interface OrderDetailProps {
   order: Order
@@ -14,7 +13,6 @@ interface OrderDetailProps {
 
 export function OrderDetail({ order, onClose }: OrderDetailProps) {
   const [status, setStatus] = useState(order.status)
-  const [showReceipt, setShowReceipt] = useState(false)
   const [loading, setLoading] = useState(false)
 
   const handleStatusChange = async (newStatus: Order['status']) => {
@@ -27,24 +25,6 @@ export function OrderDetail({ order, onClose }: OrderDetailProps) {
     } finally {
       setLoading(false)
     }
-  }
-
-  // Mock receipt for display
-  const mockReceipt = {
-    id: order.id,
-    receiptNumber: `REC-${order.orderNumber}`,
-    orderId: order.id,
-    customerId: order.customerId,
-    customerName: order.customerName,
-    customerEmail: order.customerEmail,
-    customerPhone: order.customerPhone,
-    items: order.items,
-    subtotal: order.subtotal,
-    tax: order.tax,
-    shipping: order.shipping,
-    total: order.total,
-    paymentMethod: 'Credit Card',
-    issuedAt: new Date().toISOString(),
   }
 
   return (
@@ -146,24 +126,10 @@ export function OrderDetail({ order, onClose }: OrderDetailProps) {
               >
                 Close
               </Button>
-              <Button
-                onClick={() => setShowReceipt(true)}
-                className="flex-1 gap-2"
-              >
-                <FileText className="h-4 w-4" />
-                Issue Receipt
-              </Button>
             </div>
           </div>
         </div>
       </div>
-
-      {showReceipt && (
-        <ReceiptTemplate
-          receipt={mockReceipt as any}
-          onClose={() => setShowReceipt(false)}
-        />
-      )}
     </>
   )
 }

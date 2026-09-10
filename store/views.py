@@ -10,6 +10,7 @@ from urllib.request import Request, urlopen
 import json
 
 import cloudinary
+import qrcode
 import cloudinary.uploader
 from django.contrib.auth import authenticate, get_user_model
 from django.contrib.auth.tokens import default_token_generator
@@ -89,6 +90,18 @@ else:
     )
 
 
+def _build_receipt_qr_data_url(receipt_number):
+    qr_payload = f'receipt:{receipt_number or "unknown"}'
+    qr_code = qrcode.QRCode(version=1, box_size=10, border=4)
+    qr_code.add_data(qr_payload)
+    qr_code.make(fit=True)
+    image = qr_code.make_image(fill_color='black', back_color='white')
+    buffer = io.BytesIO()
+    image.save(buffer, format='PNG')
+    encoded = base64.b64encode(buffer.getvalue()).decode('ascii')
+    return f'data:image/png;base64,{encoded}'
+
+
 def build_receipt_context(receipt):
     customer = receipt.order.customer.user
     items = []
@@ -108,6 +121,8 @@ def build_receipt_context(receipt):
             'image_url': image_url,
         })
 
+    receipt_number = getattr(receipt, 'receipt_number', '') or 'N/A'
+    qr_payload = f'receipt:{receipt_number}'
     return {
         'receipt': receipt,
         'order': receipt.order,
@@ -118,6 +133,8 @@ def build_receipt_context(receipt):
         'company_address': '123 Salon Lane, Kampala',
         'company_email': 'support@glow.com',
         'company_phone': '+256 700 000 000',
+        'qr_code_payload': qr_payload,
+        'qr_code_data_url': _build_receipt_qr_data_url(receipt_number),
     }
 
 
@@ -164,6 +181,33 @@ def _generate_report_payload(report_type, start_date=None, end_date=None):
         payload = {'products': [{'product_name': product.product_name, 'stock': product.quantity_in_stock, 'status': product.status} for product in Product.objects.order_by('-quantity_in_stock')[:20]]}
     elif report_type == 'customers':
         payload = {'customers': [{'customer_name': customer.user.get_full_name() or customer.user.email, 'orders': customer.orders.count(), 'total_spend': float(customer.orders.aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00'))} for customer in Customer.objects.select_related('user').all()[:20]]}
+    elif report_type == 'categories':
+        category_rows = []
+        for category in Category.objects.prefetch_related('products__order_items__order').all().order_by('category_name'):
+            revenue = Decimal('0.00')
+            total_quantity = 0
+            order_ids = set()
+            for product in category.products.all():
+                for item in product.order_items.all():
+                    order = item.order
+                    if not order:
+                        continue
+                    order_date = getattr(order.order_date, 'date', lambda: order.order_date)()
+                    if start_date and order_date < start_date:
+                        continue
+                    if end_date and order_date > end_date:
+                        continue
+                    revenue += item.subtotal
+                    total_quantity += item.quantity
+                    order_ids.add(order.id)
+            category_rows.append({
+                'category_name': category.category_name,
+                'total_orders': len(order_ids),
+                'total_revenue': float(revenue),
+                'total_quantity': total_quantity,
+                'product_count': category.products.count(),
+            })
+        payload = {'categories': sorted(category_rows, key=lambda row: row['total_revenue'], reverse=True)[:20]}
     else:
         payload = None
 
@@ -186,6 +230,10 @@ def _render_report_csv(report_type, payload):
         writer.writerow(['product_name', 'stock', 'status'])
         for item in payload['products']:
             writer.writerow([item['product_name'], item['stock'], item['status']])
+    elif report_type == 'categories':
+        writer.writerow(['category_name', 'total_orders', 'total_revenue', 'total_quantity', 'product_count'])
+        for item in payload['categories']:
+            writer.writerow([item['category_name'], item['total_orders'], item['total_revenue'], item['total_quantity'], item['product_count']])
     else:
         writer.writerow(['customer_name', 'orders', 'total_spend'])
         for item in payload['customers']:
@@ -393,16 +441,31 @@ def _build_tracking_url(order):
     return f'{base_url}{order.order_number}'
 
 
+def _get_order_notification_items(order):
+    items = []
+    for item in order.items.select_related('product').all():
+        product = getattr(item, 'product', None)
+        image_url = getattr(product, 'image_url', None) or getattr(product, 'image_url_2', None) or getattr(product, 'image_url_3', None)
+        items.append({
+            'name': getattr(item, 'product_name', None) or getattr(product, 'product_name', 'Product'),
+            'quantity': getattr(item, 'quantity', 1),
+            'unit_price': float(getattr(item, 'unit_price', 0) or 0),
+            'subtotal': float(getattr(item, 'subtotal', 0) or 0),
+            'image_url': image_url,
+        })
+    return items
+
+
 def _build_order_status_message(order, status):
     tracking_url = _build_tracking_url(order)
-    tracking_text = f' Track it here: {tracking_url}' if tracking_url else ''
+    tracking_text = f' Track: {tracking_url}' if tracking_url else ''
 
     if status == 'Confirmed':
         subject = 'Glow | Order confirmed'
         message = f'Glow: your order {order.order_number} has been confirmed and is being prepared for dispatch.{tracking_text}'
     elif status == 'Out for Delivery':
-        subject = 'Glow | Out for delivery'
-        message = f'Glow: your order {order.order_number} is on its way.{tracking_text}'
+        subject = 'Glow | Order out for delivery'
+        message = f'Glow: your order {order.order_number} is on the way and is out for delivery.{tracking_text}'
     elif status == 'Delivered':
         subject = 'Glow | Order delivered'
         message = f'Glow: your order {order.order_number} has been delivered successfully. Thank you for shopping with Glow.{tracking_text}'
@@ -419,14 +482,192 @@ def _send_order_status_email(order, subject, message):
     if not to_email:
         return False
 
+    tracking_url = _build_tracking_url(order)
+    items = _get_order_notification_items(order)
+    total_amount = float(order.total_amount or 0)
+    customer_name = (customer_user.get_full_name() or customer_user.email or 'Customer').strip()
+    status_label = order.order_status or 'Updated'
+    delivery_address = getattr(order, 'delivery_address', None) or 'Delivery address not provided'
+    order_date = getattr(order, 'order_date', None) or getattr(order, 'created_at', None)
+    order_date_text = order_date.strftime('%d %b %Y') if order_date else 'N/A'
+    order_time_text = order_date.strftime('%I:%M %p') if order_date else 'N/A'
+
+    item_rows = ''.join(
+        f"""
+        <tr>
+          <td style="padding: 16px 0; border-bottom: 1px solid #e5e7eb;">
+            <div style="display: flex; align-items: center; gap: 12px;">
+              <img src="{(item['image_url'] or 'https://placehold.co/80x80/f3f4f6/111827?text=Glow').strip()}" alt="{item['name']}" style="width: 48px; height: 48px; object-fit: cover; border-radius: 8px; border: 1px solid #e5e7eb; background: #f9fafb;" />
+              <div>
+                <div style="font-size: 13px; font-weight: 700; color: #111827; margin-bottom: 2px;">{item['name']}</div>
+                <div style="font-size: 11px; color: #6b7280;">Qty: {item['quantity']}</div>
+              </div>
+            </div>
+          </td>
+          <td style="padding: 16px 0; border-bottom: 1px solid #e5e7eb; color: #111827; text-align: right; font-size: 13px;">UGX {item['unit_price']:,.2f}</td>
+          <td style="padding: 16px 0; border-bottom: 1px solid #e5e7eb; color: #111827; text-align: right; font-size: 13px;">UGX {item['subtotal']:,.2f}</td>
+        </tr>
+        """ for item in items
+    ) or """
+        <tr>
+          <td colspan="3" style="padding: 12px 0; color: #6b7280; text-align: center; font-size: 12px;">No item details available.</td>
+        </tr>
+    """
+
+    status_steps = """
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin: 0 auto 22px;">
+      <tr>
+        <td width="25%" align="center" style="padding: 0 6px;">
+          <div style="display:inline-block; width: 36px; height: 36px; border-radius: 50%; background: #f97316; color: #fff; font-size: 18px; line-height: 36px; font-weight: 700; text-align: center; box-shadow: 0 8px 18px rgba(249, 115, 22, 0.25);">✓</div>
+          <div style="font-size: 12px; color: #0f172a; font-weight: 700; margin-top: 8px;">Order Confirmed</div>
+          <div style="font-size: 11px; color: #64748b; margin-top: 2px;">{order_date_text}</div>
+          <div style="font-size: 11px; color: #64748b;">{order_time_text}</div>
+        </td>
+        <td width="25%" align="center" style="padding: 0 6px;">
+          <div style="display:inline-block; width: 36px; height: 36px; border-radius: 50%; background: #e2e8f0; color: #0f172a; font-size: 18px; line-height: 36px; font-weight: 700; text-align: center;">⏳</div>
+          <div style="font-size: 12px; color: #0f172a; font-weight: 700; margin-top: 8px;">Processing</div>
+          <div style="font-size: 11px; color: #64748b; margin-top: 2px;">In progress</div>
+        </td>
+        <td width="25%" align="center" style="padding: 0 6px;">
+          <div style="display:inline-block; width: 36px; height: 36px; border-radius: 50%; background: #e2e8f0; color: #0f172a; font-size: 18px; line-height: 36px; font-weight: 700; text-align: center;">🚚</div>
+          <div style="font-size: 12px; color: #0f172a; font-weight: 700; margin-top: 8px;">Out for Delivery</div>
+          <div style="font-size: 11px; color: #64748b; margin-top: 2px;">Will be updated</div>
+        </td>
+        <td width="25%" align="center" style="padding: 0 6px;">
+          <div style="display:inline-block; width: 36px; height: 36px; border-radius: 50%; background: #e2e8f0; color: #0f172a; font-size: 18px; line-height: 36px; font-weight: 700; text-align: center;">🏠</div>
+          <div style="font-size: 12px; color: #0f172a; font-weight: 700; margin-top: 8px;">Delivered</div>
+          <div style="font-size: 11px; color: #64748b; margin-top: 2px;">Estimated</div>
+        </td>
+      </tr>
+    </table>
+    """
+
+    tracking_cta = f'<p style="margin: 12px 0 0;"><a href="{tracking_url}" style="display:inline-block; background-color:#f97316; color:#ffffff; text-decoration:none; padding: 12px 18px; border-radius: 8px; font-weight:700; font-size: 14px;">Track your order</a></p>' if tracking_url else ''
+
     html_content = f"""
     <html>
-      <body style="font-family: Arial, sans-serif; color: #111827;">
-        <h2>Glow</h2>
-        <p>Hi {customer_user.get_full_name() or customer_user.email},</p>
-        <p>{message}</p>
-        <p><strong>Order Number:</strong> {order.order_number}</p>
-        <p>Thank you for shopping with Glow.</p>
+      <body style="margin:0; padding:0; background:#edf0f3; font-family: Arial, sans-serif; color:#111827;">
+        <div style="max-width: 980px; margin: 24px auto; background: #f5f7fa; border: 1px solid #dfe7ee; border-radius: 12px; overflow: hidden; box-shadow: 0 18px 40px rgba(15, 23, 42, 0.08);">
+          <div style="background: linear-gradient(135deg, #0d1c2d 0%, #163652 100%); padding: 26px 32px 20px; color: #fff;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td valign="top" style="font-size: 16px; line-height: 1.2;">
+                  <div style="font-size: 52px; line-height: 1; font-weight: 900; letter-spacing: 1px; color:#ffffff;">GLOW</div>
+                  <div style="font-size: 12px; letter-spacing: 1.2px; color:#d8e0eb; margin-top: 8px; text-transform: uppercase;">Salon Supplies, Delivered.</div>
+                </td>
+                <td align="right" valign="middle" style="font-size: 13px; color:#d8e0eb; white-space: nowrap;">
+                  <div style="font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; color: #f9d8af; margin-bottom: 4px;">Glow essentials</div>
+                  <div>Quality products for</div>
+                  <div>professional results.</div>
+                </td>
+              </tr>
+            </table>
+          </div>
+
+          <div style="background: #f3f5f8; padding: 30px 32px 0;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td valign="top" style="width: 58%; padding-right: 20px;">
+                  <div style="display:inline-block; background:#fef3c7; color:#9a5d00; font-size: 11px; font-weight: 700; letter-spacing: 0.14em; text-transform: uppercase; padding: 7px 10px; border-radius: 999px; margin-bottom: 14px;">Order status update</div>
+                  <div style="font-size: 30px; line-height: 1.2; color: #0f172a; font-weight: 800; margin: 0 0 8px;">Hello {customer_name.split()[0] if customer_name.split() else customer_name},</div>
+                  <div style="font-size: 30px; line-height: 1.2; color: #0f172a; font-weight: 800; margin: 0 0 10px;">Your order is {status_label.lower()}.</div>
+                  <div style="font-size: 15px; color: #475569; line-height: 1.7; margin: 0 0 18px;">We've received your order and it's now being processed.<br />Here are your order details below.</div>
+
+                  <div style="font-size: 15px; color: #111827; line-height: 1.7; margin-bottom: 18px;">
+                    <span style="font-weight: 700;">Order Number:</span> <span style="font-weight: 800;">#{order.order_number}</span>
+                    <span style="color: #64748b;"> | </span>
+                    <span>Placed on: {order_date_text}</span>
+                    <span style="color: #64748b;"> | </span>
+                    <span>{order_time_text}</span>
+                  </div>
+
+                  <a href="{tracking_url or '#'}" style="display:inline-block; background:#f97316; color:#ffffff; text-decoration:none; font-weight:700; padding: 14px 22px; border-radius: 10px; font-size: 15px; box-shadow: 0 10px 18px rgba(249,115,22,0.22);">View Order Details →</a>
+                </td>
+                <td valign="bottom" align="right" style="width: 42%;">
+                  <div style="position: relative; height: 220px;">
+                    <div style="position:absolute; right:0; bottom:0; width: 330px; height: 170px; background: linear-gradient(135deg,#f9b36d 0%, #f6d1a5 100%); border-radius: 32px 0 0 32px; transform: skewX(-18deg); opacity: 0.85;"></div>
+                    <div style="position:absolute; right: 28px; bottom: 20px; width: 235px; height: 155px; background: linear-gradient(135deg, #0f172a 0%, #2a4059 100%); border-radius: 18px; box-shadow: 0 22px 32px rgba(15,23,42,0.25); transform: rotate(-2deg); border: 1px solid rgba(255,255,255,0.1);">
+                      <div style="position:absolute; left: 18px; top: 18px; font-size: 32px; line-height: 1; font-weight: 900; color:#ffffff; letter-spacing: 1px;">GLOW</div>
+                      <div style="position:absolute; left: 18px; bottom: 18px; right: 18px; height: 46px; border-radius: 10px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08);"></div>
+                    </div>
+                    <div style="position:absolute; right: 58px; bottom: 160px; font-size: 23px; font-weight: 900; color: #f97316; font-style: italic; transform: rotate(-12deg); line-height: 1.1; text-align: center;">Thanks for<br/>shopping with us!</div>
+                  </div>
+                </td>
+              </tr>
+            </table>
+          </div>
+
+          <div style="background: #0f2139; margin: 0 32px 24px; border-radius: 0 0 12px 12px; padding: 18px 20px;">
+            <div style="font-size: 13px; color: #d8e0eb; margin-bottom: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;">Your Order Status</div>
+            {status_steps}
+          </div>
+
+          <div style="background: #ffffff; margin: 0 32px 26px; padding: 22px 16px 8px; border-radius: 10px; border: 1px solid #e5e7eb;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td valign="top" style="width: 62%; padding-right: 18px;">
+                  <div style="font-size: 24px; font-weight: 800; color: #0f172a; margin: 0 0 12px;">Order Summary</div>
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse: collapse;">
+                    <thead>
+                      <tr>
+                        <th align="left" style="padding: 10px 0; font-size: 12px; color: #64748b; text-transform: uppercase; letter-spacing: 0.08em;">Product</th>
+                        <th align="right" style="padding: 10px 0; font-size: 12px; color: #64748b; text-transform: uppercase; letter-spacing: 0.08em;">Qty</th>
+                        <th align="right" style="padding: 10px 0; font-size: 12px; color: #64748b; text-transform: uppercase; letter-spacing: 0.08em;">Price</th>
+                        <th align="right" style="padding: 10px 0; font-size: 12px; color: #64748b; text-transform: uppercase; letter-spacing: 0.08em;">Total</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {item_rows}
+                    </tbody>
+                  </table>
+                  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top: 14px;">
+                    <tr>
+                      <td align="right" style="padding: 8px 0; font-size: 14px; color: #374151;">Subtotal</td>
+                      <td align="right" style="padding: 8px 0; font-size: 14px; color: #111827; font-weight: 700;">UGX {total_amount:,.2f}</td>
+                    </tr>
+                    <tr>
+                      <td align="right" style="padding: 8px 0; font-size: 14px; color: #374151;">Shipping Fee</td>
+                      <td align="right" style="padding: 8px 0; font-size: 14px; color: #111827; font-weight: 700;">UGX 0.00</td>
+                    </tr>
+                    <tr>
+                      <td align="right" style="padding: 12px 0 4px; font-size: 16px; color: #111827; font-weight: 800;">Total</td>
+                      <td align="right" style="padding: 12px 0 4px; font-size: 16px; color: #111827; font-weight: 800;">UGX {total_amount:,.2f}</td>
+                    </tr>
+                  </table>
+                </td>
+                <td valign="top" style="width: 38%; padding-left: 18px;">
+                  <div style="background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; margin-bottom: 16px;">
+                    <div style="font-size: 20px; font-weight: 800; color: #0f172a; margin-bottom: 8px;">Shipping Address</div>
+                    <div style="font-size: 14px; color: #334155; line-height: 1.7;">{delivery_address}</div>
+                  </div>
+                  <div style="background: linear-gradient(135deg, #0f2139 0%, #163a61 100%); border-radius: 12px; padding: 18px 16px; color: #ffffff;">
+                    <div style="font-size: 20px; font-weight: 800; margin-bottom: 8px;">Track Your Order</div>
+                    <div style="font-size: 13px; color: #dbeafe; margin-bottom: 14px;">Get real-time updates on your delivery status.</div>
+                    <a href="{tracking_url or '#'}" style="display:inline-block; background:#f97316; color:#ffffff; text-decoration:none; font-weight:700; padding: 12px 16px; border-radius: 8px; font-size: 14px;">Track Order →</a>
+                  </div>
+                  <div style="margin-top: 16px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px;">
+                    <div style="font-size: 20px; font-weight: 800; color: #0f172a; margin-bottom: 10px;">Need Help?</div>
+                    <div style="font-size: 13px; color: #475569; line-height: 1.7;">Our support team is here for you.<br />+256 700 123 456<br />support@glow.com<br />Live Chat (Mon - Fri, 8AM - 6PM)</div>
+                  </div>
+                </td>
+              </tr>
+            </table>
+          </div>
+
+          <div style="background: linear-gradient(135deg, #0e1d32 0%, #12314c 100%); color: #ffffff; padding: 18px 32px 24px; font-size: 13px;">
+            <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+              <tr>
+                <td style="font-size: 30px; line-height: 1; font-weight: 900; letter-spacing: 1px;">GLOW</td>
+                <td align="right" style="font-size: 12px; color: #d8e0eb;">Help Center &nbsp; | &nbsp; Returns &nbsp; | &nbsp; Privacy Policy &nbsp; | &nbsp; Contact Us</td>
+              </tr>
+              <tr>
+                <td colspan="2" style="padding-top: 12px; font-size: 12px; color: #d8e0eb; text-align: center;">
+                  © 2025 Glow. All rights reserved.<br />Professional products. Better results.
+                </td>
+              </tr>
+            </table>
+          </div>
+        </div>
       </body>
     </html>
     """
@@ -440,9 +681,7 @@ def _send_order_status_email(order, subject, message):
         return False
 
 
-def _send_order_status_sms(order, message):
-    customer_user = getattr(getattr(order, 'customer', None), 'user', None)
-    phone_number = getattr(customer_user, 'phone_number', None) or getattr(order, 'phone_number', None)
+def _send_sms_to_phone(phone_number, message, *, context_label='contact'):
     if not phone_number:
         return False
 
@@ -457,7 +696,7 @@ def _send_order_status_sms(order, message):
     from_number = (getattr(settings, 'TWILIO_PHONE_NUMBER', '') or os.getenv('TWILIO_PHONE_NUMBER', '') or '').strip()
 
     if not account_sid or not auth_token or not from_number:
-        logging.getLogger(__name__).info('Twilio SMS credentials are not configured for order %s.', order.order_number)
+        logging.getLogger(__name__).info('Twilio SMS credentials are not configured for %s.', context_label)
         return False
 
     payload = urlencode({'To': phone_number, 'From': from_number, 'Body': message}).encode('utf-8')
@@ -474,6 +713,100 @@ def _send_order_status_sms(order, message):
             return response.status < 400
     except Exception:
         return False
+
+
+def _send_order_status_sms(order, message):
+    customer_user = getattr(getattr(order, 'customer', None), 'user', None)
+    phone_number = getattr(customer_user, 'phone_number', None) or getattr(order, 'phone_number', None)
+    return _send_sms_to_phone(phone_number, message, context_label=f'order {getattr(order, "order_number", "unknown")}')
+
+
+def _send_email_to_user(user, subject, message):
+    email = getattr(user, 'email', None)
+    if not email:
+        return False
+
+    html_content = f"""
+    <html>
+      <body style="font-family: Arial, sans-serif; color: #111827;">
+        <h2>Glow</h2>
+        <p>Hi {user.get_full_name() or email},</p>
+        <p>{message}</p>
+      </body>
+    </html>
+    """
+
+    try:
+        email_message = EmailMessage(subject=subject, body=html_content, to=[email])
+        email_message.content_subtype = 'html'
+        email_message.send(fail_silently=False)
+        return True
+    except Exception:
+        return False
+
+
+def _notify_user_contact(user, subject, message):
+    if not user:
+        return False
+
+    sent = False
+    phone_number = getattr(user, 'phone_number', None)
+    if phone_number:
+        sent = _send_sms_to_phone(phone_number, message, context_label=f'user {getattr(user, "email", "unknown")}') or sent
+
+    if getattr(user, 'email', None):
+        sent = _send_email_to_user(user, subject, message) or sent
+
+    return sent
+
+
+def _get_user_preferred_contact_method(user):
+    try:
+        method = cache.get(f'login_method:{getattr(user, "id", None)}')
+        if method in ('email', 'phone'):
+            return method
+    except Exception:
+        pass
+
+    # fallback to available contact info
+    if getattr(user, 'phone_number', None):
+        return 'phone'
+    if getattr(user, 'email', None):
+        return 'email'
+    return None
+
+
+def _notify_user_preferred(order, subject, message):
+    """Send order status notification using the user's preferred channel.
+
+    Preference is stored in cache when the user logs in; if absent we
+    fall back to phone when available, otherwise email. If the preferred
+    channel fails, we attempt the other channel as a best-effort fallback.
+    """
+    customer_user = getattr(getattr(order, 'customer', None), 'user', None)
+    preferred = _get_user_preferred_contact_method(customer_user)
+
+    if preferred == 'phone':
+        sent = _send_order_status_sms(order, message)
+        if sent:
+            return True
+        # fallback to email
+        return _send_order_status_email(order, subject, message)
+
+    if preferred == 'email':
+        sent = _send_order_status_email(order, subject, message)
+        if sent:
+            return True
+        # fallback to sms
+        return _send_order_status_sms(order, message)
+
+    # no preference; choose based on available data
+    phone = getattr(customer_user, 'phone_number', None) or getattr(order, 'phone_number', None)
+    if phone:
+        sent = _send_order_status_sms(order, message)
+        if sent:
+            return True
+    return _send_order_status_email(order, subject, message)
 
 
 class IsActiveUser(BasePermission):
@@ -544,6 +877,15 @@ class LoginAPIView(APIView):
         user = authenticate(request, username=identifier, password=password)
         if not user:
             return Response({'detail': 'Invalid credentials.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        # Record the method the user used to sign in (email vs phone) so we
+        # can prefer that channel for order status notifications. Stored in
+        # cache to avoid touching the user model and migrations.
+        try:
+            method = 'email' if '@' in identifier else 'phone'
+            cache.set(f'login_method:{user.id}', method, timeout=60 * 60 * 24 * 30)  # 30 days
+        except Exception:
+            pass
 
         # Customer accounts also use the mobile API, so issue JWTs for every
         # active, authenticated user. Admin-only permissions stay enforced on
@@ -1206,10 +1548,11 @@ class ProductDetailAPIView(APIView):
             product.unit = validated['unit']
         if validated.get('status') is not None:
             product.status = validated['status']
-        if product.quantity_in_stock <= 0:
+        elif product.quantity_in_stock <= 0:
             product.status = 'Out of Stock'
-        elif product.status == 'Out of Stock':
+        else:
             product.status = 'Available'
+
         try:
             product.save()
         except IntegrityError:
@@ -1217,6 +1560,12 @@ class ProductDetailAPIView(APIView):
                 {'detail': 'A product with the same SKU or barcode already exists.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        if request.user and getattr(request.user, 'phone_number', None) or getattr(request.user, 'email', None):
+            subject = f'Product status updated: {product.product_name}'
+            message = f"Your product '{product.product_name}' status has been updated to {product.status}."
+            _notify_user_contact(request.user, subject, message)
+
         return Response(ProductSerializer(product).data, status=status.HTTP_200_OK)
 
     def patch(self, request, product_id):
@@ -1622,6 +1971,15 @@ class AdminDeliveryDetailAPIView(APIView):
         validated = serializer.validated_data
         if validated.get('delivery_status') is not None:
             delivery.delivery_status = validated['delivery_status']
+            status_map = {
+                'Preparing': 'Pending',
+                'Packed': 'Packed',
+                'Out for Delivery': 'Out for Delivery',
+                'Delivered': 'Delivered',
+            }
+            if delivery.order and delivery.delivery_status in status_map:
+                delivery.order.order_status = status_map[delivery.delivery_status]
+                delivery.order.save(update_fields=['order_status'])
         if validated.get('delivery_person') is not None:
             delivery.delivery_person = validated['delivery_person']
         if validated.get('delivery_phone') is not None:
@@ -1662,14 +2020,28 @@ class AdminReceiptListAPIView(APIView):
 
     def get(self, request):
         receipts = Receipt.objects.select_related('order', 'order__customer__user').all().order_by('-created_at')
-        data = [{
-            'id': receipt.id,
-            'receipt_number': receipt.receipt_number,
-            'customer': receipt.order.customer.user.get_full_name() or receipt.order.customer.user.email,
-            'order_number': receipt.order.order_number,
-            'amount': float(receipt.total_amount),
-            'date': receipt.receipt_date.isoformat(),
-        } for receipt in receipts]
+        data = []
+        for receipt in receipts:
+            order = receipt.order
+            order_items = order.items.select_related('product').all() if order else []
+            item_rows = [
+                {
+                    'product_name': item.product_name or getattr(item.product, 'product_name', 'Item'),
+                    'quantity': item.quantity,
+                    'unit_price': float(item.unit_price),
+                    'subtotal': float(item.subtotal),
+                }
+                for item in order_items
+            ]
+            data.append({
+                'id': receipt.id,
+                'receipt_number': receipt.receipt_number,
+                'customer': order.customer.user.get_full_name() or order.customer.user.email if order and getattr(order, 'customer', None) else 'Guest',
+                'order_number': order.order_number if order else 'N/A',
+                'amount': float(receipt.total_amount or Decimal('0.00')),
+                'date': (receipt.receipt_date or receipt.created_at).isoformat() if (receipt.receipt_date or receipt.created_at) else '',
+                'items': item_rows,
+            })
         return Response(data, status=status.HTTP_200_OK)
 
 
@@ -1772,9 +2144,15 @@ class RegisterPushTokenAPIView(APIView):
 
 
 class BroadcastNotificationAPIView(APIView):
-    """Allow sellers/admins to broadcast a notification to all salon owners (customers).
+    """Allow sellers/admins to broadcast a notification to all customer users.
 
-    POST payload: { "title": "...", "message": "...", "notification_type": "optional" }
+    POST payload:
+    {
+        "title": "...",
+        "message": "...",
+        "notification_type": "optional",
+        "channel": "email|sms|both|push|all"
+    }
     """
 
     permission_classes = [IsAdminUser]
@@ -1783,15 +2161,24 @@ class BroadcastNotificationAPIView(APIView):
         title = (request.data.get('title') or '').strip()
         message = (request.data.get('message') or '').strip()
         notification_type = (request.data.get('notification_type') or '').strip()
+        channel = (request.data.get('channel') or request.data.get('delivery_method') or 'both').strip().lower()
 
         if not title or not message:
             return Response({'detail': 'Both title and message are required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        # Target salon owners (Customers)
+        channels = {'email', 'sms'}
+        if channel in {'push', 'notification'}:
+            channels = {'push'}
+        elif channel == 'email':
+            channels = {'email'}
+        elif channel == 'sms':
+            channels = {'sms'}
+        elif channel in {'all', 'both', 'email_sms', 'email_and_sms'}:
+            channels = {'email', 'sms'}
+
         customers = Customer.objects.select_related('user').all()
         users = [c.user for c in customers if getattr(c, 'user', None)]
 
-        # Create Notification objects for each user
         notifications = []
         for user in users:
             notifications.append(Notification(user=user, title=title, message=message, notification_type=notification_type or None))
@@ -1800,41 +2187,61 @@ class BroadcastNotificationAPIView(APIView):
         except Exception:
             logging.exception('Failed to create notification records')
 
-        # Collect push tokens
-        tokens = list(PushToken.objects.filter(user__in=users).values_list('token', flat=True).distinct())
+        email_sent = 0
+        sms_sent = 0
+        if 'email' in channels:
+            for user in users:
+                if getattr(user, 'email', None):
+                    subject = f'Glow | {title}'
+                    if _send_email_to_user(user, subject, message):
+                        email_sent += 1
+
+        if 'sms' in channels:
+            for user in users:
+                phone_number = getattr(user, 'phone_number', None)
+                if phone_number:
+                    sms_text = f'Glow: {title} - {message}'
+                    if _send_sms_to_phone(phone_number, sms_text, context_label=f'broadcast to {getattr(user, "email", "unknown")}'):
+                        sms_sent += 1
 
         sent = 0
-        if tokens:
-            expo_url = 'https://exp.host/--/api/v2/push/send'
-            # Build messages for all tokens
-            messages = []
-            for t in tokens:
-                messages.append({
-                    'to': t,
-                    'sound': 'default',
-                    'title': title,
-                    'body': message,
-                    'data': {'type': notification_type or 'broadcast'},
-                })
+        if 'push' in channels:
+            try:
+                tokens = list(PushToken.objects.filter(user__in=users).values_list('token', flat=True).distinct())
+            except Exception:
+                tokens = []
+                logging.exception('Failed to load push tokens for broadcast')
 
-            # Send in chunks of 100
-            chunk_size = 100
-            for i in range(0, len(messages), chunk_size):
-                chunk = messages[i:i+chunk_size]
-                try:
-                    req = Request(expo_url, data=json.dumps(chunk).encode('utf-8'), headers={'Accept': 'application/json', 'Content-Type': 'application/json'})
-                    resp = urlopen(req, timeout=10)
-                    resp_data = resp.read()
+            if tokens:
+                expo_url = 'https://exp.host/--/api/v2/push/send'
+                messages = []
+                for t in tokens:
+                    messages.append({
+                        'to': t,
+                        'sound': 'default',
+                        'title': title,
+                        'body': message,
+                        'data': {'type': notification_type or 'broadcast'},
+                    })
+
+                chunk_size = 100
+                for i in range(0, len(messages), chunk_size):
+                    chunk = messages[i:i+chunk_size]
                     try:
-                        resp_json = json.loads(resp_data.decode('utf-8'))
-                        # expo returns an array of receipts; count optimistic
+                        req = Request(expo_url, data=json.dumps(chunk).encode('utf-8'), headers={'Accept': 'application/json', 'Content-Type': 'application/json'})
+                        urlopen(req, timeout=10)
                         sent += len(chunk)
                     except Exception:
-                        sent += len(chunk)
-                except Exception:
-                    logging.exception('Failed to send push chunk')
+                        logging.exception('Failed to send push chunk')
 
-        return Response({'message': 'Broadcast queued', 'recipients': len(users), 'tokens_sent': sent}, status=status.HTTP_200_OK)
+        return Response({
+            'message': 'Broadcast queued',
+            'recipients': len(users),
+            'email_sent': email_sent,
+            'sms_sent': sms_sent,
+            'push_sent': sent,
+            'channels': sorted(channels),
+        }, status=status.HTTP_200_OK)
 
 
 class ReportAPIView(APIView):
@@ -2321,8 +2728,7 @@ class AdminConfirmOrderAPIView(APIView):
         ensure_receipt_for_order(order)
         _add_order_status_history(order, 'Confirmed', 'Order confirmed', 'Your order has been confirmed and is being prepared for dispatch.')
         subject, message = _build_order_status_message(order, 'Confirmed')
-        _send_order_status_email(order, subject, message)
-        _send_order_status_sms(order, message)
+        _notify_user_preferred(order, subject, message)
         Notification.objects.create(
             user=order.customer.user,
             title='Order confirmed',
@@ -2353,8 +2759,7 @@ class AdminUpdateOrderStatusAPIView(APIView):
                 delivery.save(update_fields=['delivery_status'])
             _add_order_status_history(order, 'Out for Delivery', 'Out for delivery', 'Your order is on the way and a rider is heading to your address.')
             subject, message = _build_order_status_message(order, 'Out for Delivery')
-            _send_order_status_email(order, subject, message)
-            _send_order_status_sms(order, message)
+            _notify_user_preferred(order, subject, message)
         elif order.order_status == 'Delivered':
             delivery = getattr(order, 'delivery', None)
             if delivery:
@@ -2363,13 +2768,11 @@ class AdminUpdateOrderStatusAPIView(APIView):
                 delivery.save(update_fields=['delivery_status', 'delivery_date'])
             _add_order_status_history(order, 'Delivered', 'Delivered', 'Your order has been delivered successfully.')
             subject, message = _build_order_status_message(order, 'Delivered')
-            _send_order_status_email(order, subject, message)
-            _send_order_status_sms(order, message)
+            _notify_user_preferred(order, subject, message)
         else:
             _add_order_status_history(order, order.order_status, f"Status updated to {order.order_status}", f"Your order is now {order.order_status}.")
             subject, message = _build_order_status_message(order, order.order_status)
-            _send_order_status_email(order, subject, message)
-            _send_order_status_sms(order, message)
+            _notify_user_preferred(order, subject, message)
 
         Notification.objects.create(
             user=order.customer.user,

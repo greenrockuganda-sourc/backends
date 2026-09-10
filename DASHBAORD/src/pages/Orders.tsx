@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Eye, Edit2, Download, PackageOpen, Search, Filter } from 'lucide-react'
-import { createReceipt, downloadReceiptPdf, fetchOrders, getOrderDetails, updateOrderStatus } from '@/lib/api'
+import { Eye, Edit2, PackageOpen } from 'lucide-react'
+import { fetchOrders, getOrderDetails, updateOrderStatus } from '@/lib/api'
 import { notifyError, notifySuccess } from '@/lib/notify'
 import { Order } from '@/types'
 import { SkeletonTable } from '@/components/Skeleton'
@@ -19,10 +19,10 @@ const getRangeStartDate = (range: RangeKey) => {
 }
 
 const readOrdersRangeFromUrl = (): RangeKey => {
-  if (typeof window === 'undefined') return '7d'
+  if (typeof window === 'undefined') return 'all'
   const params = new URLSearchParams(window.location.search)
   const value = params.get('ordersRange')
-  return validRanges.includes(value as RangeKey) ? (value as RangeKey) : '7d'
+  return validRanges.includes(value as RangeKey) ? (value as RangeKey) : 'all'
 }
 
 const statusColors: Record<string, string> = {
@@ -51,7 +51,6 @@ export default function Orders({ token }: OrdersProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [isUpdatingStatus, setIsUpdatingStatus] = useState(false)
-  const [isDownloadingReceipt, setIsDownloadingReceipt] = useState(false)
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState('All')
 
@@ -307,33 +306,8 @@ export default function Orders({ token }: OrdersProps) {
     }
   }
 
-  const handleDownloadReceipt = async (orderId: string) => {
-    setError(null)
-    setIsDownloadingReceipt(true)
-    try {
-      const receipt = await createReceipt(token, orderId)
-      const receiptId = receipt?.id ?? receipt?.receipt_id ?? receipt?.receipt?.id
-      if (!receiptId) {
-        throw new Error('Receipt could not be created for this order.')
-      }
-
-      const blob = await downloadReceiptPdf(token, String(receiptId))
-      const url = window.URL.createObjectURL(blob)
-      const link = document.createElement('a')
-      link.href = url
-      link.download = `receipt-${orderId}.pdf`
-      document.body.appendChild(link)
-      link.click()
-      document.body.removeChild(link)
-      window.URL.revokeObjectURL(url)
-      notifySuccess('Receipt downloaded successfully')
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Unable to download receipt.'
-      setError(message)
-      notifyError(message)
-    } finally {
-      setIsDownloadingReceipt(false)
-    }
+  const handleQuickStatusChange = async (orderId: string, nextStatus: 'Confirmed' | 'Out for Delivery') => {
+    await handleUpdateOrderStatus(orderId, nextStatus)
   }
 
   const closeOrderDetails = () => {
@@ -358,6 +332,22 @@ export default function Orders({ token }: OrdersProps) {
             <option value="90d">Last 90 days</option>
             <option value="all">All time</option>
           </select>
+          <input
+            value={searchTerm}
+            onChange={(event) => setSearchTerm(event.target.value)}
+            placeholder="Search orders"
+            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+          <select
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value)}
+            className="rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          >
+            <option value="All">All statuses</option>
+            {statusOptions.map((option) => (
+              <option key={option} value={option}>{option}</option>
+            ))}
+          </select>
           <button
             type="button"
             onClick={handleExportCsv}
@@ -377,35 +367,6 @@ export default function Orders({ token }: OrdersProps) {
         </div>
       </div>
 
-      <div className="mb-6 grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div className="relative">
-          <Search className="absolute left-3 top-3 text-gray-400" size={20} />
-          <input
-            type="text"
-            placeholder="Search orders by ID, customer, or status..."
-            value={searchTerm}
-            onChange={(event) => setSearchTerm(event.target.value)}
-            className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
-        <div className="relative">
-          <Filter className="absolute left-3 top-3 text-gray-400" size={20} />
-          <select
-            value={statusFilter}
-            onChange={(event) => setStatusFilter(event.target.value)}
-            className="w-full pl-10 pr-4 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
-          >
-            <option value="All">All Statuses</option>
-            <option value="Pending">Pending</option>
-            <option value="Confirmed">Confirmed</option>
-            <option value="Processing">Processing</option>
-            <option value="Packed">Packed</option>
-            <option value="Out for Delivery">Out for Delivery</option>
-            <option value="Delivered">Delivered</option>
-            <option value="Cancelled">Cancelled</option>
-          </select>
-        </div>
-      </div>
       <div className="mb-6 grid gap-3 sm:gap-4 grid-cols-1 sm:grid-cols-3">
         <div className="rounded-lg border border-gray-200 bg-white p-4 shadow-sm">
           <p className="text-xs uppercase tracking-wide text-gray-500">Shown orders</p>
@@ -492,15 +453,30 @@ export default function Orders({ token }: OrdersProps) {
                     </td>
                     <td data-label="Date" className="px-6 py-4 text-sm text-gray-500">{order.date}</td>
                     <td data-label="Actions" className="px-6 py-4 text-sm">
-                      <div className="flex items-center gap-3">
+                      <div className="flex flex-wrap items-center gap-2">
+                        {order.status !== 'confirmed' && (
+                          <button
+                            type="button"
+                            onClick={() => handleQuickStatusChange(order.id, 'Confirmed')}
+                            className="rounded bg-green-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-green-700"
+                          >
+                            Confirm
+                          </button>
+                        )}
+                        {order.status !== 'out for delivery' && order.status !== 'delivered' && order.status !== 'cancelled' && (
+                          <button
+                            type="button"
+                            onClick={() => handleQuickStatusChange(order.id, 'Out for Delivery')}
+                            className="rounded bg-blue-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-blue-700"
+                          >
+                            Ship
+                          </button>
+                        )}
                         <button onClick={() => handleViewOrder(order.id)} className="text-blue-600 hover:text-blue-800 p-2" title="View">
                           <Eye size={18} />
                         </button>
                         <button onClick={() => handleViewOrder(order.id)} className="text-blue-600 hover:text-blue-800 p-2" title="Edit">
                           <Edit2 size={18} />
-                        </button>
-                        <button onClick={() => handleDownloadReceipt(order.id)} disabled={isDownloadingReceipt} className="text-blue-600 hover:text-blue-800 disabled:opacity-50 p-2" title="Download">
-                          <Download size={18} />
                         </button>
                       </div>
                     </td>
@@ -516,7 +492,7 @@ export default function Orders({ token }: OrdersProps) {
         <div className="mt-4 flex justify-center">
           <button
             type="button"
-            onClick={handleExportCsv}
+            onClick={() => setVisibleOrders((current) => current + 20)}
             className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 transition-colors"
           >
             Load more orders
@@ -554,6 +530,25 @@ export default function Orders({ token }: OrdersProps) {
               </div>
 
               <div className="flex flex-wrap items-center gap-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
+                <label className="text-sm font-medium text-gray-700">Quick actions</label>
+                {selectedOrder.status !== 'confirmed' && (
+                  <button
+                    type="button"
+                    onClick={() => handleQuickStatusChange(selectedOrder.id, 'Confirmed')}
+                    className="rounded-md bg-green-600 px-3 py-2 text-sm font-medium text-white hover:bg-green-700"
+                  >
+                    Confirm order
+                  </button>
+                )}
+                {selectedOrder.status !== 'out for delivery' && selectedOrder.status !== 'delivered' && selectedOrder.status !== 'cancelled' && (
+                  <button
+                    type="button"
+                    onClick={() => handleQuickStatusChange(selectedOrder.id, 'Out for Delivery')}
+                    className="rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-700"
+                  >
+                    Ship order
+                  </button>
+                )}
                 <label className="text-sm font-medium text-gray-700">Update status</label>
                 <select
                   value={statusDraft}
@@ -572,13 +567,6 @@ export default function Orders({ token }: OrdersProps) {
                   className="rounded-md bg-blue-600 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {isUpdatingStatus ? 'Saving...' : 'Save status'}
-                </button>
-                <button
-                  onClick={() => handleDownloadReceipt(selectedOrder.id)}
-                  disabled={isDownloadingReceipt}
-                  className="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {isDownloadingReceipt ? 'Preparing...' : 'Download receipt'}
                 </button>
               </div>
 
