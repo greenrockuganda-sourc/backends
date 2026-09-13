@@ -35,6 +35,17 @@ def get_bool_env(key: str, default: bool = False) -> bool:
     return value.strip().lower() in {'1', 'true', 'yes', 'on'}
 
 
+def resolve_email_backend() -> str:
+    configured_backend = os.getenv('EMAIL_BACKEND')
+    if configured_backend:
+        return configured_backend
+
+    if os.getenv('EMAIL_HOST_USER') and os.getenv('EMAIL_HOST_PASSWORD'):
+        return 'django.core.mail.backends.smtp.EmailBackend'
+
+    return 'django.core.mail.backends.console.EmailBackend'
+
+
 def parse_database_url(database_url: str) -> dict:
     parsed = urlparse(database_url)
     scheme = parsed.scheme
@@ -174,12 +185,13 @@ USE_TZ = True
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
-EMAIL_BACKEND = os.getenv('EMAIL_BACKEND', 'django.core.mail.backends.smtp.EmailBackend')
 EMAIL_HOST = os.getenv('EMAIL_HOST', 'in-v3.mailjet.com')
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
-EMAIL_USE_TLS = os.getenv('EMAIL_USE_TLS', 'True').lower() in {'1', 'true', 'yes', 'on'}
+EMAIL_USE_TLS = get_bool_env('EMAIL_USE_TLS', True)
+EMAIL_USE_SSL = get_bool_env('EMAIL_USE_SSL', False)
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
+EMAIL_BACKEND = resolve_email_backend()
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'noreply@growsalon.com')
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
 ORDER_TRACKING_BASE_URL = os.getenv('ORDER_TRACKING_BASE_URL', 'http://127.0.0.1:8000/track')

@@ -8,10 +8,35 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
+from backend import settings as backend_settings
 from .models import Brand, Category, Customer, Delivery, Order, OrderItem, Product, Receipt, Recipe
 from .views import generate_product_sku
 
 User = get_user_model()
+
+
+class EmailConfigTests(TestCase):
+    def test_resolve_email_backend_uses_console_when_smtp_credentials_missing(self):
+        with patch.dict('os.environ', {
+            'EMAIL_BACKEND': '',
+            'EMAIL_HOST_USER': '',
+            'EMAIL_HOST_PASSWORD': '',
+        }, clear=False):
+            self.assertEqual(
+                backend_settings.resolve_email_backend(),
+                'django.core.mail.backends.console.EmailBackend',
+            )
+
+    def test_resolve_email_backend_uses_smtp_when_credentials_are_present(self):
+        with patch.dict('os.environ', {
+            'EMAIL_BACKEND': '',
+            'EMAIL_HOST_USER': 'mail@example.com',
+            'EMAIL_HOST_PASSWORD': 'secret',
+        }, clear=False):
+            self.assertEqual(
+                backend_settings.resolve_email_backend(),
+                'django.core.mail.backends.smtp.EmailBackend',
+            )
 
 
 class ProductSkuGenerationTests(TestCase):
