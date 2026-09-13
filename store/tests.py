@@ -9,7 +9,7 @@ from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from backend import settings as backend_settings
-from .models import Brand, Category, Customer, Delivery, Order, OrderItem, Product, Receipt, Recipe
+from .models import Brand, Category, Customer, Delivery, Notification, Order, OrderItem, Product, Receipt, Recipe
 from .views import generate_product_sku
 
 User = get_user_model()
@@ -775,6 +775,34 @@ class AdminReceiptPDFAndEmailTests(TestCase):
         self.assertEqual(len(email.attachments), 1)
         self.assertTrue(str(receipt.receipt_number) in email.attachments[0][0])
 
+    @override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
+    def test_order_confirmation_email_uses_template_and_customer_address(self):
+        customer_user = User.objects.create_user(
+            email='joshuajessey3@gmail.com',
+            password='StrongPass123!',
+            first_name='Joshua',
+            last_name='Jessey',
+            role='Customer',
+            is_active=True,
+        )
+        customer = Customer.objects.create(user=customer_user)
+        order = Order.objects.create(
+            customer=customer,
+            order_number='ORD-TEMPLATE-EMAIL',
+            total_amount='25000',
+            payment_method='PAY_ON_DELIVERY',
+            order_status='Pending',
+            delivery_address='Kampala',
+            phone_number='0700000000',
+        )
+
+        subject, message = __import__('store.views', fromlist=['_build_order_status_message'])._build_order_status_message(order, 'Confirmed')
+        sent = __import__('store.views', fromlist=['_send_order_status_email'])._send_order_status_email(order, subject, message)
+
+        self.assertTrue(sent)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, ['joshuajessey3@gmail.com'])
+        self.assertIn('Track your order', mail.outbox[0].body)
 
 class HomeCatalogSeedTests(TestCase):
     def test_seed_home_catalog_creates_products_for_each_category(self):

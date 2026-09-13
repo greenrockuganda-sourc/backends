@@ -185,14 +185,33 @@ USE_TZ = True
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
-EMAIL_HOST = os.getenv('EMAIL_HOST', 'in-v3.mailjet.com')
+EMAIL_HOST = os.getenv('EMAIL_HOST', 'in-v3.mailjet.com').strip() or 'in-v3.mailjet.com'
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
 EMAIL_USE_TLS = get_bool_env('EMAIL_USE_TLS', True)
 EMAIL_USE_SSL = get_bool_env('EMAIL_USE_SSL', False)
-EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '')
-EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '')
-EMAIL_BACKEND = resolve_email_backend()
-DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'noreply@growsalon.com')
+EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '').strip()
+EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '').strip()
+DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'noreply@growsalon.com').strip()
+
+placeholder_values = {
+    'replace_with_mailjet_smtp_user',
+    'replace_with_mailjet_smtp_password',
+    'your_mailjet_smtp_user',
+    'your_mailjet_smtp_password',
+    'your_verified_sender@example.com',
+    'noreply@growsalon.com',
+}
+if (
+    not EMAIL_HOST_USER
+    or not EMAIL_HOST_PASSWORD
+    or not DEFAULT_FROM_EMAIL
+    or EMAIL_HOST_USER.lower() in {value.lower() for value in placeholder_values}
+    or EMAIL_HOST_PASSWORD.lower() in {value.lower() for value in placeholder_values}
+):
+    EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'
+else:
+    EMAIL_BACKEND = resolve_email_backend()
+
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
 ORDER_TRACKING_BASE_URL = os.getenv('ORDER_TRACKING_BASE_URL', 'http://127.0.0.1:8000/track')
 TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID', '')

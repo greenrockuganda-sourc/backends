@@ -1,13 +1,15 @@
 import base64
 import csv
+import importlib
 import io
+import json
 import logging
 import os
 import re
+from datetime import timedelta
 from decimal import Decimal
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
-import json
 
 import cloudinary
 import cloudinary.uploader
@@ -450,20 +452,63 @@ def _send_order_status_email(order, subject, message):
     if not to_email:
         return False
 
-    html_content = f"""
-    <html>
-      <body style="font-family: Arial, sans-serif; color: #111827;">
-        <h2>Glow</h2>
-        <p>Hi {customer_user.get_full_name() or customer_user.email},</p>
-        <p>{message}</p>
-        <p><strong>Order Number:</strong> {order.order_number}</p>
-        <p>Thank you for shopping with Glow.</p>
-      </body>
-    </html>
-    """
+    tracking_base = (getattr(settings, 'ORDER_TRACKING_BASE_URL', '') or '').rstrip('/')
+    tracking_url = f'{tracking_base}/{order.order_number}' if tracking_base else ''
+    order_items = []
+    subtotal_amount = Decimal('0.00')
+    for item in order.items.select_related('product').all():
+        quantity = int(getattr(item, 'quantity', 0) or 0)
+        unit_price = Decimal(str(getattr(item, 'unit_price', '0') or '0'))
+        subtotal = Decimal(str(getattr(item, 'subtotal', '0') or '0'))
+        subtotal_amount += subtotal
+        order_items.append({
+            'name': getattr(item, 'product_name', None) or getattr(getattr(item, 'product', None), 'product_name', 'Item'),
+            'quantity': quantity,
+            'unit_price': float(unit_price),
+            'subtotal': float(subtotal),
+        })
+
+    estimated_delivery = (timezone.now().date() + timedelta(days=3)).strftime('%d %b %Y')
+    shipping_address = order.delivery_address or getattr(order.customer, 'address', '') or 'Kampala, Uganda'
+    try:
+        context = {
+            'customer_name': customer_user.get_full_name() or customer_user.email,
+            'message': message,
+            'order_number': order.order_number,
+            'tracking_url': tracking_url,
+            'company_name': 'Glow',
+            'order_status': getattr(order, 'order_status', 'Confirmed'),
+            'order_date': order.order_date or timezone.now(),
+            'estimated_delivery_date': estimated_delivery,
+            'shipping_address': shipping_address,
+            'order_items': order_items,
+            'subtotal': float(subtotal_amount),
+            'shipping_fee': float(getattr(order, 'delivery_fee', 0) or 0),
+            'total_amount': float(getattr(order, 'total_amount', 0) or 0),
+            'support_phone': '+256 702 123 456',
+            'support_email': 'support@glowsaloonsupplies.lovie.me',
+        }
+        html_content = render_to_string('email/order_confirmation_email.html', context)
+    except Exception:
+        html_content = f"""
+        <html>
+          <body style="font-family: Arial, sans-serif; color: #111827;">
+            <h2>Glow</h2>
+            <p>Hi {customer_user.get_full_name() or customer_user.email},</p>
+            <p>{message}</p>
+            <p><strong>Order Number:</strong> {order.order_number}</p>
+            <p>Thank you for shopping with Glow.</p>
+          </body>
+        </html>
+        """
 
     try:
-        email = EmailMessage(subject=subject, body=html_content, to=[to_email])
+        email = EmailMessage(
+            subject=subject,
+            body=html_content,
+            from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', None),
+            to=[to_email],
+        )
         email.content_subtype = 'html'
         email.send(fail_silently=False)
         return True

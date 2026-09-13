@@ -1,0 +1,186 @@
+<html>
+  <body style="margin:0; padding:0; background:#edf1f4; font-family:Arial, Helvetica, sans-serif; color:#0b1f33;">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse; background:#edf1f4;">
+      <tr>
+        <td align="center" style="padding:28px 12px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="760" style="border-collapse:collapse; background:#f5f7f9; width:760px; max-width:760px;">
+            <tr>
+              <td style="background:#102f4d; padding:18px 30px 16px 30px;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;">
+                  <tr>
+                    <td valign="middle" align="left">
+                      <div style="font-size:46px; line-height:0.9; font-weight:900; letter-spacing:2px; color:#ffffff; font-family:Arial, Helvetica, sans-serif;">GLOW</div>
+                      <div style="font-size:10px; line-height:1.2; letter-spacing:2px; color:#dfeaf8; text-transform:uppercase; margin-top:4px;">Salon Supplies, Delivered.</div>
+                    </td>
+                    <td valign="middle" align="right">
+                      <div style="font-size:12px; line-height:1.5; color:#dfeaf8; text-align:right;">Quality products for<br>professional results.</div>
+                      <div style="display:inline-block; width:40px; height:40px; border-radius:10px; background:#f39a2d; margin-top:8px; position:relative;">
+                        <div style="position:absolute; left:11px; top:9px; width:12px; height:12px; border:2px solid #ffffff; border-left:none; border-top:none; transform:rotate(45deg);"></div>
+                        <div style="position:absolute; right:9px; top:13px; width:7px; height:7px; background:#ffffff; border-radius:50%;"></div>
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <tr>
+              <td style="background:#f3f5f7; padding:30px 30px 0 30px;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;">
+                  <tr>
+                    <td valign="middle" width="58%" style="padding-right:12px;">
+                      <div style="font-size:29px; line-height:1.2; color:#0d1f32; font-weight:700; margin:0 0 10px; font-family:Arial, Helvetica, sans-serif;">Hello {{ customer_name }},</div>
+                      <div style="font-size:32px; line-height:1.1; color:#0d1f32; font-weight:700; margin:0 0 12px; font-family:Arial, Helvetica, sans-serif;">Thank you for your order!</div>
+                      <div style="font-size:15px; line-height:1.6; color:#3c4d5f; margin:0 0 18px;">We’ve received your order and it’s now being processed.<br>Here are your order details below.</div>
+
+                      <div style="font-size:14px; line-height:1.7; color:#0d1f32; margin:0 0 5px;">
+                        <span style="font-weight:700;">Order Number:</span> <span style="font-weight:700; color:#102f4d;">#{{ order_number }}</span>
+                      </div>
+                      <div style="font-size:14px; line-height:1.7; color:#53657a; margin:0 0 18px;">
+                        Placed on: {{ order_date|date:'d M Y' }} | {{ order_date|date:'h:i A' }}
+                      </div>
+
+                      {% if tracking_url %}
+                        <a href="{{ tracking_url }}" style="display:inline-block; background:#f39a2d; color:#ffffff; text-decoration:none; font-size:14px; font-weight:700; padding:14px 24px; border-radius:10px;">View Order Details →</a>
+                      {% endif %}
+                    </td>
+
+                    <td valign="middle" width="42%" align="center" style="padding-left:10px;">
+                      <img src="https://images.unsplash.com/photo-1607082348824-0a96f2a4b9da?auto=format&fit=crop&w=900&q=80" alt="Professional salon delivery package" width="420" height="260" style="display:block; max-width:100%; width:100%; height:auto; border:0; border-radius:12px; box-shadow:0 14px 26px rgba(16,47,77,0.15); object-fit:cover;" />
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <tr>
+              <td style="background:#102f4d; padding:16px 22px 12px 22px;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;">
+                  <tr>
+                    <td valign="middle" width="33%" style="padding:0 8px 8px 0;">
+                      <div style="display:inline-block; width:28px; height:28px; border-radius:50%; background:#ffffff; color:#102f4d; font-size:18px; font-weight:700; text-align:center; line-height:28px; margin-right:9px;">✓</div>
+                      <span style="font-size:12px; color:#edf5ff; text-transform:uppercase; letter-spacing:0.5px;">Order Confirmed</span>
+                    </td>
+                    <td valign="middle" width="22%" style="padding:0 8px 8px 0;">
+                      <div style="display:inline-block; width:28px; height:28px; border-radius:50%; background:rgba(255,255,255,0.16); color:#dfeaf8; font-size:18px; font-weight:700; text-align:center; line-height:28px; margin-right:9px;">•</div>
+                      <span style="font-size:12px; color:#dfeaf8;">Processing</span>
+                    </td>
+                    <td valign="middle" width="23%" style="padding:0 8px 8px 0;">
+                      <div style="display:inline-block; width:28px; height:28px; border-radius:50%; background:rgba(255,255,255,0.16); color:#dfeaf8; font-size:18px; font-weight:700; text-align:center; line-height:28px; margin-right:9px;">•</div>
+                      <span style="font-size:12px; color:#dfeaf8;">Out for Delivery</span>
+                    </td>
+                    <td valign="middle" width="22%" style="padding:0 0 8px 0;">
+                      <div style="display:inline-block; width:28px; height:28px; border-radius:50%; background:rgba(255,255,255,0.16); color:#dfeaf8; font-size:18px; font-weight:700; text-align:center; line-height:28px; margin-right:9px;">•</div>
+                      <span style="font-size:12px; color:#dfeaf8;">Delivered</span>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <tr>
+              <td style="background:#eef3f8; padding:12px 24px 18px 24px;">
+                <div style="background:#ffffff; border:1px solid #dfe7ef; border-radius:10px; padding:16px 18px;">
+                  <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;">
+                    <tr>
+                      <td width="46" style="font-size:34px; font-weight:900; color:#f39a2d; line-height:1; vertical-align:middle;">🚚</td>
+                      <td style="font-size:18px; font-weight:700; color:#102f4d; padding-left:8px;">Estimated Delivery Date</td>
+                      <td align="right" style="font-size:20px; font-weight:700; color:#102f4d;">{{ estimated_delivery_date }}</td>
+                    </tr>
+                  </table>
+                </div>
+              </td>
+            </tr>
+
+            <tr>
+              <td style="background:#edf2f8; padding:0 24px 18px 24px;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;">
+                  <tr>
+                    <td valign="top" width="62%" style="padding-right:16px;">
+                      <div style="font-size:22px; line-height:1.2; font-weight:700; color:#0d1f32; margin:0 0 12px;">Order Summary</div>
+
+                      <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse; background:#ffffff; border:1px solid #dfe7ef; border-radius:8px; overflow:hidden;">
+                        <tr style="background:#f8fafc;">
+                          <th align="left" style="padding:12px 10px; font-size:12px; color:#4f6f8f; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e5edf5;">Product</th>
+                          <th align="center" style="padding:12px 10px; font-size:12px; color:#4f6f8f; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e5edf5;">Qty</th>
+                          <th align="right" style="padding:12px 10px; font-size:12px; color:#4f6f8f; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e5edf5;">Price</th>
+                          <th align="right" style="padding:12px 10px; font-size:12px; color:#4f6f8f; text-transform:uppercase; letter-spacing:0.5px; border-bottom:1px solid #e5edf5;">Total</th>
+                        </tr>
+                        {% for item in order_items %}
+                          <tr>
+                            <td style="padding:12px 10px; border-bottom:1px solid #edf2f7; font-size:13px; color:#0d1f32;">{{ item.name }}</td>
+                            <td align="center" style="padding:12px 10px; border-bottom:1px solid #edf2f7; font-size:13px; color:#0d1f32;">{{ item.quantity }}</td>
+                            <td align="right" style="padding:12px 10px; border-bottom:1px solid #edf2f7; font-size:13px; color:#0d1f32;">UGX {{ item.unit_price|floatformat:0 }}</td>
+                            <td align="right" style="padding:12px 10px; border-bottom:1px solid #edf2f7; font-size:13px; color:#0d1f32;">UGX {{ item.subtotal|floatformat:0 }}</td>
+                          </tr>
+                        {% empty %}
+                          <tr>
+                            <td colspan="4" style="padding:16px 10px; font-size:13px; color:#51657b;">No items listed for this order.</td>
+                          </tr>
+                        {% endfor %}
+                        <tr>
+                          <td colspan="3" align="right" style="padding:12px 10px; font-size:13px; color:#51657b;">Subtotal</td>
+                          <td align="right" style="padding:12px 10px; font-size:13px; color:#0d1f32; font-weight:700;">UGX {{ subtotal|floatformat:0 }}</td>
+                        </tr>
+                        <tr>
+                          <td colspan="3" align="right" style="padding:12px 10px; font-size:13px; color:#51657b;">Shipping Fee</td>
+                          <td align="right" style="padding:12px 10px; font-size:13px; color:#0d1f32; font-weight:700;">UGX {{ shipping_fee|floatformat:0 }}</td>
+                        </tr>
+                        <tr>
+                          <td colspan="3" align="right" style="padding:14px 10px; font-size:14px; color:#0d1f32; font-weight:700;">Total</td>
+                          <td align="right" style="padding:14px 10px; font-size:15px; color:#0d1f32; font-weight:900; background:#f4f1ee;">UGX {{ total_amount|floatformat:0 }}</td>
+                        </tr>
+                      </table>
+                    </td>
+
+                    <td valign="top" width="38%" style="padding-left:12px;">
+                      <div style="background:#ffffff; border:1px solid #dfe7ef; border-radius:10px; padding:16px 14px; margin-bottom:16px;">
+                        <div style="font-size:12px; line-height:1.2; font-weight:700; letter-spacing:0.5px; color:#537094; text-transform:uppercase; margin-bottom:8px;">Shipping Address</div>
+                        <div style="font-size:14px; line-height:1.7; color:#0d1f32; font-weight:700;">{{ customer_name }}</div>
+                        <div style="font-size:14px; line-height:1.7; color:#4a5a6b;">{{ shipping_address }}</div>
+                      </div>
+
+                      <div style="background:linear-gradient(180deg, #0d2442 0%, #123d67 100%); border-radius:12px; padding:18px 14px; color:#ffffff; margin-bottom:16px;">
+                        <div style="font-size:28px; line-height:1; margin-bottom:8px;">📦</div>
+                        <div style="font-size:22px; line-height:1.2; font-weight:700; margin-bottom:6px;">Track your order</div>
+                        <div style="font-size:13px; line-height:1.5; color:#dfeaf8; margin-bottom:14px;">Get real-time updates on your delivery status.</div>
+                        {% if tracking_url %}
+                          <a href="{{ tracking_url }}" style="display:inline-block; background:#f39a2d; color:#ffffff; text-decoration:none; padding:10px 18px; border-radius:8px; font-size:13px; font-weight:700;">Track Order →</a>
+                        {% endif %}
+                      </div>
+
+                      <div style="background:#ffffff; border:1px solid #dfe7ef; border-radius:10px; padding:16px 14px;">
+                        <div style="font-size:28px; line-height:1; margin-bottom:8px;">🛟</div>
+                        <div style="font-size:20px; line-height:1.2; font-weight:700; color:#0d1f32; margin-bottom:6px;">Need Help?</div>
+                        <div style="font-size:13px; line-height:1.6; color:#4a5a6b; margin-bottom:10px;">Our support team is here for you.</div>
+                        <div style="font-size:13px; line-height:1.7; color:#0d1f32; font-weight:700;">📞 {{ support_phone }}</div>
+                        <div style="font-size:13px; line-height:1.7; color:#0d1f32; font-weight:700;">✉️ {{ support_email }}</div>
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <tr>
+              <td style="background:#102f4d; padding:20px 28px 18px 28px;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;">
+                  <tr>
+                    <td valign="middle" align="left" style="font-size:42px; line-height:1; letter-spacing:2px; color:#ffffff; font-weight:900;">GLOW</td>
+                    <td valign="middle" align="right" style="font-size:12px; color:#dfeaf8;">
+                      <span style="padding:0 8px;">Help Center</span>
+                      <span style="padding:0 8px;">Returns</span>
+                      <span style="padding:0 8px;">Privacy Policy</span>
+                      <span style="padding:0 8px;">Contact Us</span>
+                    </td>
+                  </tr>
+                </table>
+                <div style="text-align:center; font-size:12px; color:#dfeaf8; line-height:1.8; margin-top:16px;">© 2025 Glow. All rights reserved.<br>Professional products. Better results.</div>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
