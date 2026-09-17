@@ -161,6 +161,142 @@ class AdminDataFieldAPITests(TestCase):
         self.assertEqual(receipt_response.data[0]['address'], 'Kampala, Ntinda')
 
 
+class AdminStatusCreateAPITests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.admin_user = User.objects.create_user(
+            email='admin@example.com',
+            password='StrongPass123!',
+            first_name='Admin',
+            last_name='User',
+            phone_number='0700000000',
+            role='Admin',
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {str(RefreshToken.for_user(self.admin_user).access_token)}")
+
+        self.customer_user = User.objects.create_user(
+            email='salon@example.com',
+            password='StrongPass123!',
+            first_name='Nina',
+            last_name='Client',
+            phone_number='0701234567',
+            role='Customer',
+        )
+        self.customer = Customer.objects.create(
+            user=self.customer_user,
+            salon_name='Glow Studio',
+            address='Kampala, Ntinda',
+            district='Kampala',
+            city='Kampala',
+        )
+        self.order = Order.objects.create(
+            customer=self.customer,
+            order_number='ORD-STATUS-001',
+            total_amount=20000,
+            delivery_address='Kampala, Ntinda',
+            phone_number='0701234567',
+            order_status='Pending',
+        )
+
+    def test_status_update_creates_delivery_when_missing(self):
+        self.assertFalse(hasattr(self.order, 'delivery'))
+
+        response = self.client.patch(reverse('admin_update_order_status', kwargs={'order_id': self.order.id}), {
+            'status': 'Delivered',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.order.refresh_from_db()
+        self.assertEqual(self.order.order_status, 'Delivered')
+        self.assertTrue(hasattr(self.order, 'delivery'))
+        self.assertEqual(self.order.delivery.delivery_status, 'Delivered')
+
+    def test_new_arrival_broadcast_route_exists_and_creates_notifications(self):
+        response = self.client.post(reverse('broadcast_new_arrival_notifications'), {
+            'title': 'New Arrival',
+            'message': 'New salon products are now available.',
+            'notification_type': 'new_arrival',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(Notification.objects.filter(user=self.customer_user, notification_type='new_arrival').exists())
+
+
+class CustomerUserAndCampaignAPITests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.admin_user = User.objects.create_user(
+            email='admin@example.com',
+            password='StrongPass123!',
+            first_name='Admin',
+            last_name='User',
+            phone_number='0700000000',
+            role='Admin',
+            is_staff=True,
+            is_superuser=True,
+        )
+        self.client.credentials(HTTP_AUTHORIZATION=f"Bearer {str(RefreshToken.for_user(self.admin_user).access_token)}")
+
+        self.customer_user = User.objects.create_user(
+            email='customer@example.com',
+            password='StrongPass123!',
+            first_name='Jane',
+            last_name='Customer',
+            phone_number='0701234567',
+            role='Customer',
+        )
+        self.customer = Customer.objects.create(
+            user=self.customer_user,
+            salon_name='Jane Salon',
+            address='Kampala, Ntinda',
+            district='Kampala',
+            city='Kampala',
+        )
+
+    def test_customer_and_user_list_routes_exist_for_admin_and_customer_users(self):
+        customer_list = self.client.get(reverse('customers_api'))
+        self.assertEqual(customer_list.status_code, 200)
+        self.assertIsInstance(customer_list.data, list)
+
+        admin_customer_list = self.client.get(reverse('admin_customers'))
+        self.assertEqual(admin_customer_list.status_code, 200)
+        self.assertIsInstance(admin_customer_list.data, list)
+
+        admin_user_list = self.client.get(reverse('admin_users_api'))
+        self.assertEqual(admin_user_list.status_code, 200)
+        self.assertIsInstance(admin_user_list.data, list)
+
+        user_list = self.client.get(reverse('users_api'))
+        self.assertEqual(user_list.status_code, 200)
+        self.assertIsInstance(user_list.data, list)
+
+    @override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
+    def test_customer_email_campaign_endpoint_sends_to_valid_recipients(self):
+        response = self.client.post(reverse('customer_email_campaign'), {
+            'subject': 'New product drop',
+            'message': 'Fresh stock has landed.',
+            'send_to_all': True,
+        }, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertGreaterEqual(response.data['sent'], 1)
+        self.assertIn('sent', response.data)
+        self.assertEqual(len(mail.outbox), 1)
+
+    def test_push_broadcast_route_accepts_customer_notifications(self):
+        response = self.client.post(reverse('customer_push_broadcast'), {
+            'title': 'New arrival',
+            'message': 'New salon essentials are here.',
+            'notification_type': 'new_arrival',
+        }, format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertGreaterEqual(response.data['recipients'], 1)
+        self.assertIn('recipients', response.data)
+
+
 class AuthAndProfileAPITests(TestCase):
     def setUp(self):
         self.client = APIClient()
@@ -666,6 +802,52 @@ class AdminDashboardAndProductAPITests(TestCase):
 
         self.assertGreaterEqual(mock_instance.send.call_count, 3)
         self.assertEqual(mock_email_cls.call_args_list[0].kwargs['to'], [customer_user.email])
+
+    @patch('store.views.EmailMessage')
+    def test_cancelled_orders_send_customer_email_notification(self, mock_email_cls):
+        customer_user = User.objects.create_user(
+            email='customer-cancel@example.com',
+            password='StrongPass123!',
+            first_name='Cancel',
+            last_name='Customer',
+            role='Customer',
+            is_active=True,
+        )
+        customer = Customer.objects.create(user=customer_user)
+        order = Order.objects.create(
+            customer=customer,
+            order_number='ORD-CANCEL-EMAIL',
+            total_amount='12000',
+            payment_method='PAY_ON_DELIVERY',
+            order_status='Confirmed',
+            delivery_address='Kampala',
+            phone_number='0700000001',
+        )
+        OrderItem.objects.create(
+            order=order,
+            product=Product.objects.create(
+                category=Category.objects.create(category_name='Cancellation Items'),
+                brand=Brand.objects.create(brand_name='Cancel Brand'),
+                product_name='Cancelled Product',
+                buying_price='1000',
+                selling_price='1200',
+                quantity_in_stock=3,
+                sku='SKU-CANCEL-EMAIL',
+            ),
+            product_name='Cancelled Product',
+            quantity=1,
+            unit_price='12000',
+            subtotal='12000',
+        )
+
+        customer_client = APIClient()
+        customer_client.credentials(HTTP_AUTHORIZATION=f"Bearer {str(RefreshToken.for_user(customer_user).access_token)}")
+
+        response = customer_client.patch(reverse('cancel_order', kwargs={'order_id': order.id}), format='json')
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(mock_email_cls.called)
+        self.assertEqual(mock_email_cls.call_args.kwargs['to'], [customer_user.email])
 
 
 @override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')

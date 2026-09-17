@@ -24,6 +24,7 @@ from django.http import FileResponse, HttpResponse
 from django.template.loader import render_to_string
 from django.conf import settings
 from django.core.mail import EmailMessage
+from django.core.validators import ValidationError, validate_email
 from email.mime.image import MIMEImage
 import tempfile
 from reportlab.pdfgen import canvas
@@ -32,7 +33,9 @@ from django.shortcuts import redirect, render
 from django.utils import timezone
 
 try:
-    from weasyprint import HTML, CSS
+    weasyprint_module = importlib.import_module('weasyprint')
+    HTML = getattr(weasyprint_module, 'HTML', None)
+    CSS = getattr(weasyprint_module, 'CSS', None)
 except ImportError:
     HTML = None
     CSS = None
@@ -86,8 +89,8 @@ if cloudinary_cloud_name and cloudinary_api_key and cloudinary_api_secret:
         secure=True,
     )
 else:
-    logging.getLogger(__name__).warning(
-        'Cloudinary is not configured. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, and CLOUDINARY_API_SECRET in the environment.'
+    logging.getLogger(__name__).info(
+        'Cloudinary is not configured; image uploads will be skipped until credentials are provided.'
     )
 
 
@@ -371,7 +374,7 @@ def upload_image_to_cloudinary(uploaded_file):
     api_secret = (os.getenv('CLOUDINARY_API_SECRET') or '').strip()
 
     if not (cloud_name and api_key and api_secret):
-        logging.getLogger(__name__).warning(
+        logging.getLogger(__name__).info(
             'Cloudinary upload skipped because credentials are missing.'
         )
         return None
@@ -392,6 +395,76 @@ def upload_image_to_cloudinary(uploaded_file):
 
 def _add_order_status_history(order, status, title, detail):
     return OrderStatusHistory.objects.create(order=order, status=status, title=title, detail=detail)
+
+
+def _ensure_delivery_for_order(order, delivery_status='Preparing', delivery_person=None, delivery_phone=None, estimated_delivery_time=None, delivery_notes=None):
+    delivery = getattr(order, 'delivery', None)
+    if delivery is None:
+        delivery = Delivery.objects.create(
+            order=order,
+            delivery_status=delivery_status,
+            delivery_person=delivery_person or '',
+            delivery_phone=delivery_phone or '',
+            estimated_delivery_time=estimated_delivery_time or '',
+            delivery_notes=delivery_notes or '',
+        )
+        return delivery
+
+    if delivery_status and delivery.delivery_status != delivery_status:
+        delivery.delivery_status = delivery_status
+    if delivery_person is not None:
+        delivery.delivery_person = delivery_person
+    if delivery_phone is not None:
+        delivery.delivery_phone = delivery_phone
+    if estimated_delivery_time is not None:
+        delivery.estimated_delivery_time = estimated_delivery_time
+    if delivery_notes is not None:
+        delivery.delivery_notes = delivery_notes
+    if delivery.delivery_status == 'Delivered' and not delivery.delivery_date:
+        delivery.delivery_date = timezone.now()
+    delivery.save()
+    return delivery
+
+
+def _apply_order_status_update(order, new_status, request_data=None):
+    request_data = request_data or {}
+    order.order_status = new_status
+    order.save(update_fields=['order_status'])
+    ensure_receipt_for_order(order)
+
+    if order.order_status in {'Out for Delivery', 'Delivered'}:
+        delivery = _ensure_delivery_for_order(
+            order,
+            delivery_status=order.order_status,
+            estimated_delivery_time=(request_data.get('estimated_delivery_time') or None),
+            delivery_notes=(request_data.get('delivery_notes') or None),
+        )
+        if order.order_status == 'Out for Delivery':
+            _add_order_status_history(order, 'Out for Delivery', 'Out for delivery', 'Your order is on the way and a rider is heading to your address.')
+            subject, message = _build_order_status_message(order, 'Out for Delivery')
+            _send_order_status_email(order, subject, message)
+            _send_order_status_sms(order, message)
+        elif order.order_status == 'Delivered':
+            delivery.delivery_status = 'Delivered'
+            delivery.delivery_date = timezone.now()
+            delivery.save(update_fields=['delivery_status', 'delivery_date'])
+            _add_order_status_history(order, 'Delivered', 'Delivered', 'Your order has been delivered successfully.')
+            subject, message = _build_order_status_message(order, 'Delivered')
+            _send_order_status_email(order, subject, message)
+            _send_order_status_sms(order, message)
+    else:
+        _add_order_status_history(order, order.order_status, f"Status updated to {order.order_status}", f"Your order is now {order.order_status}.")
+        subject, message = _build_order_status_message(order, order.order_status)
+        _send_order_status_email(order, subject, message)
+        _send_order_status_sms(order, message)
+
+    Notification.objects.create(
+        user=order.customer.user,
+        title='Order updated',
+        message=f'Your order {order.order_number} is now {order.order_status}.',
+        notification_type='order',
+    )
+    return order
 
 
 def generate_product_sku(product_name, exclude_product_id=None):
@@ -446,10 +519,46 @@ def _build_order_status_message(order, status):
     return subject, message
 
 
+def _send_email_message(to_email, subject, html_content, attachments=None, reply_to=None):
+    email = (to_email or '').strip()
+    if not email:
+        return False
+
+    try:
+        validate_email(email)
+    except ValidationError:
+        logging.getLogger(__name__).warning('Skipping email send because %s is not a valid email address.', email)
+        return False
+
+    try:
+        message = EmailMessage(
+            subject=subject,
+            body=html_content,
+            from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', None),
+            to=[email],
+            reply_to=reply_to or [getattr(settings, 'DEFAULT_FROM_EMAIL', '')],
+        )
+        message.content_subtype = 'html'
+        if attachments:
+            for attachment in attachments:
+                if isinstance(attachment, MIMEImage):
+                    message.attach(attachment)
+                elif isinstance(attachment, tuple) and len(attachment) == 3:
+                    filename, content, mime_type = attachment
+                    message.attach(filename, content, mime_type)
+        message.send(fail_silently=False)
+        return True
+    except Exception:
+        logger = logging.getLogger(__name__)
+        logger.exception('Failed to send email to %s with subject "%s".', email, subject)
+        return False
+
+
 def _send_order_status_email(order, subject, message):
     customer_user = getattr(getattr(order, 'customer', None), 'user', None)
-    to_email = getattr(customer_user, 'email', None)
+    to_email = (getattr(customer_user, 'email', '') or '').strip()
     if not to_email:
+        logging.getLogger(__name__).info('Skipping order-status email for order %s because no customer email is set.', order.order_number)
         return False
 
     tracking_base = (getattr(settings, 'ORDER_TRACKING_BASE_URL', '') or '').rstrip('/')
@@ -502,18 +611,7 @@ def _send_order_status_email(order, subject, message):
         </html>
         """
 
-    try:
-        email = EmailMessage(
-            subject=subject,
-            body=html_content,
-            from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', None),
-            to=[to_email],
-        )
-        email.content_subtype = 'html'
-        email.send(fail_silently=False)
-        return True
-    except Exception:
-        return False
+    return _send_email_message(to_email, subject, html_content, reply_to=[getattr(settings, 'DEFAULT_FROM_EMAIL', '')])
 
 
 def _send_order_status_sms(order, message):
@@ -1421,6 +1519,40 @@ class InventoryAdminAPIView(APIView):
         return Response({'id': product.id, 'current_stock': product.quantity_in_stock, 'stock_status': 'Out of Stock' if product.quantity_in_stock <= 0 else ('Low Stock' if product.quantity_in_stock <= product.reorder_level else 'In Stock')}, status=status.HTTP_200_OK)
 
 
+def _serialize_customer(customer):
+    user = getattr(customer, 'user', None)
+    return {
+        'id': customer.id,
+        'customer_name': user.get_full_name() or (user.email if user else ''),
+        'salon_name': customer.salon_name or '',
+        'email': getattr(user, 'email', ''),
+        'phone': getattr(user, 'phone_number', '') or '',
+        'address': customer.address or '',
+        'number_of_orders': customer.orders.count(),
+        'total_purchases': float(customer.orders.aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')),
+        'is_active': getattr(user, 'is_active', True),
+    }
+
+
+class CustomerListAPIView(APIView):
+    permission_classes = [IsActiveUser]
+
+    def get(self, request):
+        queryset = Customer.objects.select_related('user').all()
+        if not (getattr(request.user, 'is_staff', False) or str(getattr(request.user, 'role', '') or '').lower() in {'admin', 'seller'}):
+            queryset = queryset.filter(user=request.user)
+        search = request.query_params.get('search', '').strip()
+        if search:
+            queryset = queryset.filter(
+                Q(user__first_name__icontains=search)
+                | Q(user__last_name__icontains=search)
+                | Q(salon_name__icontains=search)
+                | Q(user__phone_number__icontains=search)
+                | Q(user__email__icontains=search)
+            )
+        return Response([_serialize_customer(customer) for customer in queryset.order_by('-created_at')], status=status.HTTP_200_OK)
+
+
 class CustomerAdminListAPIView(APIView):
     permission_classes = [IsAdminUser]
 
@@ -1436,20 +1568,7 @@ class CustomerAdminListAPIView(APIView):
                 | Q(user__email__icontains=search)
             )
         customers = queryset.order_by('-created_at')
-        data = []
-        for customer in customers:
-            data.append({
-                'id': customer.id,
-                'customer_name': customer.user.get_full_name() or customer.user.email,
-                'salon_name': customer.salon_name or '',
-                'email': customer.user.email,
-                'phone': customer.user.phone_number or '',
-                'address': customer.address or '',
-                'number_of_orders': customer.orders.count(),
-                'total_purchases': float(customer.orders.aggregate(total=Sum('total_amount'))['total'] or Decimal('0.00')),
-                'is_active': customer.user.is_active,
-            })
-        return Response(data, status=status.HTTP_200_OK)
+        return Response([_serialize_customer(customer) for customer in customers], status=status.HTTP_200_OK)
 
 
 class CustomerAdminDetailAPIView(APIView):
@@ -1506,6 +1625,162 @@ class CustomerAdminDetailAPIView(APIView):
         return Response({'message': 'Customer updated.'}, status=status.HTTP_200_OK)
 
 
+def _serialize_user_record(user):
+    return {
+        'id': user.id,
+        'first_name': user.first_name,
+        'last_name': user.last_name,
+        'full_name': user.get_full_name(),
+        'email': user.email,
+        'phone_number': user.phone_number or '',
+        'role': user.role,
+        'is_active': user.is_active,
+        'created_at': user.created_at.isoformat() if getattr(user, 'created_at', None) else None,
+        'updated_at': user.updated_at.isoformat() if getattr(user, 'updated_at', None) else None,
+    }
+
+
+class UserListAPIView(APIView):
+    permission_classes = [IsActiveUser]
+
+    def get(self, request):
+        queryset = User.objects.all()
+        if not (getattr(request.user, 'is_staff', False) or str(getattr(request.user, 'role', '') or '').lower() in {'admin', 'seller'}):
+            queryset = queryset.filter(pk=request.user.pk)
+        search = request.query_params.get('search', '').strip()
+        if search:
+            queryset = queryset.filter(
+                Q(first_name__icontains=search)
+                | Q(last_name__icontains=search)
+                | Q(email__icontains=search)
+                | Q(phone_number__icontains=search)
+            )
+        users = queryset.order_by('-created_at')
+        return Response([_serialize_user_record(user) for user in users], status=status.HTTP_200_OK)
+
+
+class AdminUserListAPIView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        queryset = User.objects.all()
+        search = request.query_params.get('search', '').strip()
+        if search:
+            queryset = queryset.filter(
+                Q(first_name__icontains=search)
+                | Q(last_name__icontains=search)
+                | Q(email__icontains=search)
+                | Q(phone_number__icontains=search)
+            )
+        users = queryset.order_by('-created_at')
+        return Response([_serialize_user_record(user) for user in users], status=status.HTTP_200_OK)
+
+
+class CustomerEmailCampaignAPIView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def post(self, request):
+        subject = (request.data.get('subject') or request.data.get('title') or 'Customer update').strip()
+        message = (request.data.get('message') or '').strip()
+        if not message:
+            return Response({'detail': 'Message is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        explicit_recipients = request.data.get('recipients') or request.data.get('customer_email') or request.data.get('email')
+        if explicit_recipients:
+            if isinstance(explicit_recipients, str):
+                email_list = [value.strip() for value in explicit_recipients.split(',') if value.strip()]
+            elif isinstance(explicit_recipients, (list, tuple)):
+                email_list = [str(value).strip() for value in explicit_recipients if str(value).strip()]
+            else:
+                email_list = [str(explicit_recipients).strip()]
+            unique_emails = []
+            seen = set()
+            for email in email_list:
+                if email and email not in seen:
+                    seen.add(email)
+                    unique_emails.append(email)
+            sent = 0
+            for email in unique_emails:
+                if _send_email_message(email, subject, f'<p>{message}</p>'):
+                    sent += 1
+            return Response({'message': 'Campaign email sent.', 'sent': sent, 'recipients': len(unique_emails)}, status=status.HTTP_200_OK)
+
+        target = str(request.data.get('target') or request.data.get('segment') or 'all').strip().lower()
+        app_user_only = bool(request.data.get('app_user_only') or request.data.get('is_app_user'))
+        send_to_all = bool(request.data.get('send_to_all') or target in {'all', 'customers', 'all_customers'})
+
+        customers = Customer.objects.select_related('user').all()
+        if app_user_only:
+            customers = customers.filter(user__push_tokens__isnull=False).distinct()
+        if not send_to_all and target not in {'all', 'customers', 'all_customers'}:
+            customers = customers.filter(user__role__iexact='Customer')
+
+        emails = []
+        for customer in customers:
+            email = (getattr(customer.user, 'email', '') or '').strip()
+            if email and customer.user.is_active:
+                emails.append(email)
+
+        unique_emails = []
+        seen = set()
+        for email in emails:
+            if email not in seen:
+                seen.add(email)
+                unique_emails.append(email)
+
+        sent = 0
+        for email in unique_emails:
+            if _send_email_message(email, subject, f'<p>{message}</p>'):
+                sent += 1
+        return Response({'message': 'Campaign email sent.', 'sent': sent, 'recipients': len(unique_emails)}, status=status.HTTP_200_OK)
+
+
+class CustomerPushBroadcastAPIView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def post(self, request):
+        title = (request.data.get('title') or request.data.get('subject') or '').strip()
+        message = (request.data.get('message') or '').strip()
+        notification_type = (request.data.get('notification_type') or 'broadcast').strip() or 'broadcast'
+        if not title or not message:
+            return Response({'detail': 'Title and message are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        app_user_only = bool(request.data.get('app_user_only') or request.data.get('is_app_user'))
+        target_users = User.objects.filter(role='Customer', is_active=True)
+        if app_user_only:
+            target_users = target_users.filter(push_tokens__isnull=False).distinct()
+
+        customer_users = list(target_users.order_by('-created_at'))
+        notifications = [
+            Notification(user=user, title=title, message=message, notification_type=notification_type)
+            for user in customer_users
+        ]
+        if notifications:
+            Notification.objects.bulk_create(notifications)
+
+        tokens = list(PushToken.objects.filter(user__in=customer_users).values_list('token', flat=True).distinct())
+        sent = 0
+        if tokens:
+            expo_url = 'https://exp.host/--/api/v2/push/send'
+            messages = [{
+                'to': token,
+                'sound': 'default',
+                'title': title,
+                'body': message,
+                'data': {'type': notification_type},
+            } for token in tokens]
+            for i in range(0, len(messages), 100):
+                chunk = messages[i:i + 100]
+                try:
+                    req = Request(expo_url, data=json.dumps(chunk).encode('utf-8'), headers={'Accept': 'application/json', 'Content-Type': 'application/json'})
+                    resp = urlopen(req, timeout=10)
+                    resp.read()
+                    sent += len(chunk)
+                except Exception:
+                    logging.exception('Failed to send push notification chunk')
+        return Response({'message': 'Customer broadcast sent.', 'recipients': len(customer_users), 'tokens_sent': sent}, status=status.HTTP_200_OK)
+
+
 class AdminOrderDetailAPIView(APIView):
     permission_classes = [IsAdminUser]
 
@@ -1544,6 +1819,9 @@ class AdminCancelOrderAPIView(APIView):
         order.order_status = 'Cancelled'
         order.save(update_fields=['order_status'])
         _add_order_status_history(order, 'Cancelled', 'Order cancelled', 'Your order has been cancelled by the seller due to stock or processing issues.')
+        subject, message = _build_order_status_message(order, 'Cancelled')
+        _send_order_status_email(order, subject, message)
+        _send_order_status_sms(order, message)
         Notification.objects.create(
             user=order.customer.user,
             title='Order cancelled',
@@ -1718,6 +1996,10 @@ class AdminDeliveryDetailAPIView(APIView):
         if delivery.delivery_status == 'Delivered' and not delivery.delivery_date:
             delivery.delivery_date = timezone.now()
         delivery.save()
+
+        if delivery.order and delivery.order.order_status != delivery.delivery_status:
+            delivery.order.order_status = delivery.delivery_status
+            delivery.order.save(update_fields=['order_status'])
         return Response({'message': 'Delivery updated.'}, status=status.HTTP_200_OK)
 
 
@@ -2393,6 +2675,16 @@ class CancelOrderAPIView(APIView):
 
         order.order_status = 'Cancelled'
         order.save(update_fields=['order_status'])
+        _add_order_status_history(order, 'Cancelled', 'Order cancelled', 'Your order has been cancelled successfully.')
+        subject, message = _build_order_status_message(order, 'Cancelled')
+        _send_order_status_email(order, subject, message)
+        _send_order_status_sms(order, message)
+        Notification.objects.create(
+            user=order.customer.user,
+            title='Order cancelled',
+            message=f'Your order {order.order_number} has been cancelled successfully.',
+            notification_type='order',
+        )
         for item in order.items.all():
             item.product.quantity_in_stock += item.quantity
             if item.product.quantity_in_stock > 0:
@@ -2460,42 +2752,60 @@ class AdminUpdateOrderStatusAPIView(APIView):
         order = Order.objects.filter(pk=order_id).first()
         if not order:
             return Response({'detail': 'Order not found.'}, status=status.HTTP_404_NOT_FOUND)
-        order.order_status = serializer.validated_data['status']
-        order.save(update_fields=['order_status'])
-        ensure_receipt_for_order(order)
-
-        if order.order_status == 'Out for Delivery':
-            delivery = getattr(order, 'delivery', None)
-            if delivery:
-                delivery.delivery_status = 'Out for Delivery'
-                delivery.save(update_fields=['delivery_status'])
-            _add_order_status_history(order, 'Out for Delivery', 'Out for delivery', 'Your order is on the way and a rider is heading to your address.')
-            subject, message = _build_order_status_message(order, 'Out for Delivery')
-            _send_order_status_email(order, subject, message)
-            _send_order_status_sms(order, message)
-        elif order.order_status == 'Delivered':
-            delivery = getattr(order, 'delivery', None)
-            if delivery:
-                delivery.delivery_status = 'Delivered'
-                delivery.delivery_date = timezone.now()
-                delivery.save(update_fields=['delivery_status', 'delivery_date'])
-            _add_order_status_history(order, 'Delivered', 'Delivered', 'Your order has been delivered successfully.')
-            subject, message = _build_order_status_message(order, 'Delivered')
-            _send_order_status_email(order, subject, message)
-            _send_order_status_sms(order, message)
-        else:
-            _add_order_status_history(order, order.order_status, f"Status updated to {order.order_status}", f"Your order is now {order.order_status}.")
-            subject, message = _build_order_status_message(order, order.order_status)
-            _send_order_status_email(order, subject, message)
-            _send_order_status_sms(order, message)
-
-        Notification.objects.create(
-            user=order.customer.user,
-            title='Order updated',
-            message=f'Your order {order.order_number} is now {order.order_status}.',
-            notification_type='order',
-        )
+        _apply_order_status_update(order, serializer.validated_data['status'], request.data)
         return Response({'message': 'Order status updated.'}, status=status.HTTP_200_OK)
+
+
+class AdminCreateOrderStatusAPIView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, order_id):
+        order = Order.objects.filter(pk=order_id).first()
+        if not order:
+            return Response({'detail': 'Order not found.'}, status=status.HTTP_404_NOT_FOUND)
+        serializer = OrderStatusSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        _apply_order_status_update(order, serializer.validated_data['status'], request.data)
+        return Response({
+            'message': 'Order status created and updated.',
+            'order_id': order.id,
+            'order_status': order.order_status,
+        }, status=status.HTTP_201_CREATED)
+
+
+class AdminCreateDeliveryAPIView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def post(self, request):
+        order_id = request.data.get('order_id') or request.data.get('orderId')
+        if not order_id:
+            return Response({'detail': 'order_id is required.'}, status=status.HTTP_400_BAD_REQUEST)
+        order = Order.objects.filter(pk=order_id).first()
+        if not order:
+            return Response({'detail': 'Associated order not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        delivery_status = request.data.get('delivery_status') or request.data.get('status') or 'Preparing'
+        delivery = _ensure_delivery_for_order(
+            order,
+            delivery_status=delivery_status,
+            delivery_person=request.data.get('delivery_person') or request.data.get('driver_name') or None,
+            delivery_phone=request.data.get('delivery_phone') or request.data.get('driver_phone') or None,
+            estimated_delivery_time=request.data.get('estimated_delivery_time') or None,
+            delivery_notes=request.data.get('delivery_notes') or None,
+        )
+        if delivery_status in {'Out for Delivery', 'Delivered'}:
+            order.order_status = delivery_status
+            order.save(update_fields=['order_status'])
+        return Response({
+            'id': delivery.id,
+            'order_id': order.id,
+            'delivery_status': delivery.delivery_status,
+            'delivery_person': delivery.delivery_person,
+            'delivery_phone': delivery.delivery_phone,
+            'estimated_delivery_time': delivery.estimated_delivery_time,
+            'delivery_notes': delivery.delivery_notes,
+        }, status=status.HTTP_201_CREATED)
 
 
 class AdminUpdatePaymentAPIView(APIView):
@@ -2628,16 +2938,12 @@ class AdminReceiptEmailAPIView(APIView):
             html = f"Please find attached receipt {receipt.receipt_number}."
 
         subject = f"Receipt {receipt.receipt_number}"
-        email = EmailMessage(subject=subject, body=html, to=[to_email])
-        email.content_subtype = 'html'
-        # Do not set `mixed_subtype` — newer Django EmailMessage no longer supports this undocumented attribute.
-        try:
-            email.attach(f"{receipt.receipt_number}.pdf", pdf_bytes, 'application/pdf')
-            for mime_image, _ in attachments:
-                email.attach(mime_image)
-            email.send(fail_silently=False)
-        except Exception as e:
-            return Response({'detail': 'Failed to send email.', 'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        image_cids, image_attachments = _fetch_inline_images_for_email(context['items'])
+        ready_attachments = [(f"{receipt.receipt_number}.pdf", pdf_bytes, 'application/pdf')]
+        ready_attachments.extend(mime_image for mime_image, _ in image_attachments)
+
+        if not _send_email_message(to_email, subject, html, attachments=ready_attachments):
+            return Response({'detail': 'Failed to send email.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         return Response({'message': 'Email sent.', 'pdf_url': receipt.pdf_url}, status=status.HTTP_200_OK)
 

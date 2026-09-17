@@ -89,7 +89,7 @@ DEBUG = get_bool_env('DEBUG', False)
 
 ALLOWED_HOSTS = [
     host.strip()
-    for host in os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1').split(',')
+    for host in os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1,testserver').split(',')
     if host.strip()
 ]
 
@@ -189,6 +189,7 @@ EMAIL_HOST = os.getenv('EMAIL_HOST', 'in-v3.mailjet.com').strip() or 'in-v3.mail
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
 EMAIL_USE_TLS = get_bool_env('EMAIL_USE_TLS', True)
 EMAIL_USE_SSL = get_bool_env('EMAIL_USE_SSL', False)
+EMAIL_TIMEOUT = int(os.getenv('EMAIL_TIMEOUT', '30'))
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '').strip()
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '').strip()
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'noreply@growsalon.com').strip()
