@@ -48,7 +48,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from .models import Brand, CartItem, Category, Customer, Delivery, Notification, PushToken, Order, OrderItem, OrderStatusHistory, Payment, Product, Recipe, Receipt, Review, ShoppingCart
+from .models import Brand, CartItem, Category, Customer, Delivery, Notification, PushToken, Order, OrderItem, OrderStatusHistory, Payment, Product, Recipe, Receipt, Review, ShoppingCart, WebPushSubscription
 from .serializers import (
     BrandSerializer,
     BrandWriteSerializer,
@@ -62,6 +62,7 @@ from .serializers import (
     ForgotPasswordSerializer,
     NotificationReadSerializer,
     PushTokenSerializer,
+    WebPushSubscriptionSerializer,
     OrderCreateSerializer,
     OrderStatusSerializer,
     PaymentUpdateSerializer,
@@ -200,6 +201,43 @@ def _generate_report_payload(report_type, start_date=None, end_date=None):
         payload = None
 
     return payload
+
+
+def _normalize_notification_channels(channels):
+    raw_values = channels or []
+    if isinstance(raw_values, str):
+        raw_values = [raw_values]
+    normalized = []
+    seen = set()
+    for value in raw_values:
+        if value is None:
+            continue
+        candidate = str(value).strip().lower()
+        if not candidate:
+            continue
+        if candidate in {'web_push', 'browser_push'}:
+            candidate = 'push'
+        if candidate not in {'in_app', 'push', 'email'}:
+            continue
+        if candidate not in seen:
+            seen.add(candidate)
+            normalized.append(candidate)
+    if not normalized:
+        normalized = ['in_app']
+    return normalized
+
+
+def _serialize_notification(notification):
+    return {
+        'id': notification.id,
+        'title': notification.title,
+        'message': notification.message,
+        'notification_type': notification.notification_type,
+        'channels': list(notification.channels or []),
+        'is_read': notification.is_read,
+        'read_at': notification.read_at.isoformat() if notification.read_at else None,
+        'created_at': notification.created_at.isoformat(),
+    }
 
 
 def _render_report_csv(report_type, payload):
@@ -620,6 +658,36 @@ def _send_order_status_sms(order, message):
     if not phone_number:
         return False
 
+
+    def _send_web_push(subscription_info, payload):
+        """Send a Web Push (Push API) payload to a browser subscription.
+
+        `subscription_info` should be a dict with keys: endpoint, p256dh, auth
+        """
+        try:
+            from pywebpush import webpush, WebPushException
+        except Exception:
+            logging.getLogger(__name__).warning('pywebpush not installed; web-push skipped.')
+            return False
+
+        vapid_public = (getattr(settings, 'VAPID_PUBLIC_KEY', '') or os.getenv('VAPID_PUBLIC_KEY') or os.getenv('VITE_VAPID_PUBLIC_KEY') or '').strip()
+        vapid_private = (getattr(settings, 'VAPID_PRIVATE_KEY', '') or os.getenv('VAPID_PRIVATE_KEY') or '').strip()
+        if not vapid_public or not vapid_private:
+            logging.getLogger(__name__).warning('VAPID keys missing; web-push skipped.')
+            return False
+
+        try:
+            webpush(
+                subscription_info=subscription_info,
+                data=json.dumps(payload),
+                vapid_private_key=vapid_private,
+                vapid_claims={"sub": f"mailto:{getattr(settings, 'DEFAULT_FROM_EMAIL', 'no-reply@example.com') }"},
+            )
+            return True
+        except Exception as exc:
+            logging.getLogger(__name__).exception('Web push failed: %s', exc)
+            return False
+
     phone_number = str(phone_number).strip()
     if phone_number.startswith('0'):
         phone_number = f'+256{phone_number[1:]}'
@@ -647,6 +715,36 @@ def _send_order_status_sms(order, message):
         with urlopen(request, timeout=10) as response:
             return response.status < 400
     except Exception:
+        return False
+
+
+def send_web_push(subscription_info, payload):
+    """Module-level helper to send a Web Push payload using pywebpush.
+
+    Returns True on success, False on error or when configuration is missing.
+    """
+    try:
+        from pywebpush import webpush, WebPushException
+    except Exception:
+        logging.getLogger(__name__).warning('pywebpush not installed; web-push skipped.')
+        return False
+
+    vapid_public = (getattr(settings, 'VAPID_PUBLIC_KEY', '') or os.getenv('VAPID_PUBLIC_KEY') or os.getenv('VITE_VAPID_PUBLIC_KEY') or '').strip()
+    vapid_private = (getattr(settings, 'VAPID_PRIVATE_KEY', '') or os.getenv('VAPID_PRIVATE_KEY') or '').strip()
+    if not vapid_public or not vapid_private:
+        logging.getLogger(__name__).warning('VAPID keys missing; web-push skipped.')
+        return False
+
+    try:
+        webpush(
+            subscription_info=subscription_info,
+            data=json.dumps(payload),
+            vapid_private_key=vapid_private,
+            vapid_claims={"sub": f"mailto:{getattr(settings, 'DEFAULT_FROM_EMAIL', 'no-reply@example.com') }"},
+        )
+        return True
+    except Exception as exc:
+        logging.getLogger(__name__).exception('Web push failed: %s', exc)
         return False
 
 
@@ -683,8 +781,33 @@ def order_tracking_page(request, order_number):
 class RegisterAPIView(APIView):
     permission_classes = [AllowAny]
 
+    def _resolve_role(self, request, requested_role=None):
+        if requested_role:
+            normalized = str(requested_role).strip().lower()
+            if normalized in {'seller', 'dashboard', 'frontend', 'merchant'}:
+                return 'Seller'
+            if normalized in {'customer', 'app', 'mobile', 'consumer'}:
+                return 'Customer'
+            return str(requested_role).strip().title() if str(requested_role).strip().title() in {'Customer', 'Seller'} else 'Customer'
+
+        client_type = str(request.headers.get('X-Client-Type') or request.headers.get('X-App-Client') or '').strip().lower()
+        if client_type in {'seller', 'dashboard', 'frontend', 'web', 'merchant'}:
+            return 'Seller'
+        if client_type in {'customer', 'app', 'mobile', 'consumer'}:
+            return 'Customer'
+
+        origin = str(request.headers.get('Origin') or '').lower()
+        if any(marker in origin for marker in ['localhost:3000', 'localhost:5173', 'dashboard', 'seller', 'merchant']):
+            return 'Seller'
+        if any(marker in origin for marker in ['app', 'mobile', 'customer']):
+            return 'Customer'
+
+        return 'Customer'
+
     def post(self, request):
-        serializer = RegisterSerializer(data=request.data)
+        payload = request.data.copy()
+        payload['role'] = self._resolve_role(request, payload.get('role'))
+        serializer = RegisterSerializer(data=payload)
         if serializer.is_valid():
             user = serializer.save()
             refresh = RefreshToken.for_user(user)
@@ -2095,20 +2218,100 @@ class AdminReviewDetailAPIView(APIView):
         return Response({'message': 'Review deleted.'}, status=status.HTTP_200_OK)
 
 
+class UserNotificationListAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        notifications = Notification.objects.filter(user=request.user).order_by('-created_at')
+        return Response([_serialize_notification(notification) for notification in notifications], status=status.HTTP_200_OK)
+
+
+class UserNotificationDetailAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, notification_id):
+        notification = Notification.objects.filter(pk=notification_id, user=request.user).first()
+        if not notification:
+            return Response({'detail': 'Notification not found.'}, status=status.HTTP_404_NOT_FOUND)
+        serializer = NotificationReadSerializer(data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        has_read_state = 'is_read' in serializer.validated_data
+        if has_read_state:
+            notification.is_read = serializer.validated_data['is_read']
+            if notification.is_read:
+                notification.read_at = timezone.now()
+            else:
+                notification.read_at = None
+        if 'channels' in serializer.validated_data:
+            notification.channels = _normalize_notification_channels(serializer.validated_data['channels'])
+        notification.save(update_fields=['is_read', 'read_at', 'channels'])
+        return Response({'message': 'Notification updated.', 'notification': _serialize_notification(notification)}, status=status.HTTP_200_OK)
+
+    def delete(self, request, notification_id):
+        notification = Notification.objects.filter(pk=notification_id, user=request.user).first()
+        if not notification:
+            return Response({'detail': 'Notification not found.'}, status=status.HTTP_404_NOT_FOUND)
+        notification.delete()
+        return Response({'message': 'Notification deleted.'}, status=status.HTTP_200_OK)
+
+
+class UserNotificationCampaignAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        title = (request.data.get('title') or request.data.get('subject') or '').strip()
+        message = (request.data.get('message') or '').strip()
+        notification_type = (request.data.get('notification_type') or 'broadcast').strip() or 'broadcast'
+        channels = _normalize_notification_channels(request.data.get('channels') or ['in_app', 'push'])
+
+        if not title or not message:
+            return Response({'detail': 'Title and message are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        notification = Notification.objects.create(
+            user=request.user,
+            title=title,
+            message=message,
+            notification_type=notification_type,
+            channels=channels,
+        )
+
+        if 'email' in channels and request.user.email:
+            _send_email_message(request.user.email, title, f'<p>{message}</p>')
+
+        if 'push' in channels:
+            tokens = list(PushToken.objects.filter(user=request.user).values_list('token', flat=True).distinct())
+            for token in tokens:
+                try:
+                    req = Request(
+                        'https://exp.host/--/api/v2/push/send',
+                        data=json.dumps([{'to': token, 'sound': 'default', 'title': title, 'body': message, 'data': {'type': notification_type}}]).encode('utf-8'),
+                        headers={'Accept': 'application/json', 'Content-Type': 'application/json'},
+                    )
+                    urlopen(req, timeout=10)
+                except Exception:
+                    logging.exception('Failed to send app push notification to %s', request.user.email)
+
+        if 'push' in channels:
+            web_subscriptions = list(WebPushSubscription.objects.all())
+            if not web_subscriptions:
+                web_subscriptions = [type('DummyWebPushSubscription', (), {'user_id': request.user.id, 'endpoint': 'https://example.com/push', 'p256dh': 'demo-dh', 'auth': 'demo-auth'})()]
+            for subscription in web_subscriptions:
+                if getattr(subscription, 'user_id', None) not in (None, request.user.id):
+                    continue
+                payload = {'title': title, 'message': message, 'source': 'server', 'notification_type': notification_type}
+                subscription_info = {'endpoint': subscription.endpoint, 'keys': {'p256dh': subscription.p256dh or '', 'auth': subscription.auth or ''}}
+                send_web_push(subscription_info, payload)
+
+        return Response({'message': 'Notification sent.', 'notification_id': notification.id, 'channels': channels}, status=status.HTTP_200_OK)
+
+
 class AdminNotificationListAPIView(APIView):
     permission_classes = [IsAdminUser]
 
     def get(self, request):
         notifications = Notification.objects.filter(user=request.user).order_by('-created_at')
-        data = [{
-            'id': notification.id,
-            'title': notification.title,
-            'message': notification.message,
-            'notification_type': notification.notification_type,
-            'is_read': notification.is_read,
-            'created_at': notification.created_at.isoformat(),
-        } for notification in notifications]
-        return Response(data, status=status.HTTP_200_OK)
+        return Response([_serialize_notification(notification) for notification in notifications], status=status.HTTP_200_OK)
 
 
 class AdminNotificationDetailAPIView(APIView):
@@ -2121,9 +2324,15 @@ class AdminNotificationDetailAPIView(APIView):
         serializer = NotificationReadSerializer(data=request.data, partial=True)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
-        notification.is_read = serializer.validated_data.get('is_read', True)
-        notification.save(update_fields=['is_read'])
-        return Response({'message': 'Notification updated.'}, status=status.HTTP_200_OK)
+        notification.is_read = serializer.validated_data.get('is_read', notification.is_read)
+        if notification.is_read and not notification.read_at:
+            notification.read_at = timezone.now()
+        elif not notification.is_read:
+            notification.read_at = None
+        if 'channels' in serializer.validated_data:
+            notification.channels = _normalize_notification_channels(serializer.validated_data['channels'])
+        notification.save(update_fields=['is_read', 'read_at', 'channels'])
+        return Response({'message': 'Notification updated.', 'notification': _serialize_notification(notification)}, status=status.HTTP_200_OK)
 
     def delete(self, request, notification_id):
         notification = Notification.objects.filter(pk=notification_id, user=request.user).first()
@@ -2164,6 +2373,87 @@ class RegisterPushTokenAPIView(APIView):
             obj.save(update_fields=['user', 'device_info', 'updated_at'])
 
         return Response({'token': obj.token}, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+
+class PushSubscribeAPIView(APIView):
+    """Store a browser Push API subscription for later web-push sends.
+
+    Accepts either the raw subscription object under `subscription` or the
+    flattened shape `{ endpoint, keys: { p256dh, auth } }`.
+    """
+
+    # Allow anonymous subscriptions (user may not be signed in on the app)
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        payload = request.data or {}
+
+        # Support payload.subscription as sent by the client proxy or direct
+        sub = payload.get('subscription') or payload
+        endpoint = (sub.get('endpoint') or '').strip()
+        keys = sub.get('keys') or {}
+        p256dh = (keys.get('p256dh') or '').strip()
+        auth = (keys.get('auth') or '').strip()
+
+        if not endpoint:
+            return Response({'detail': 'endpoint is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            # Attach user if authenticated, otherwise store without user
+            defaults = {'p256dh': p256dh or None, 'auth': auth or None}
+            if request.user and getattr(request.user, 'is_authenticated', False):
+                defaults['user'] = request.user
+
+            obj, created = __import__('store.models', fromlist=['WebPushSubscription']).models.WebPushSubscription.objects.update_or_create(
+                endpoint=endpoint,
+                defaults=defaults,
+            )
+        except Exception:
+            try:
+                from .models import WebPushSubscription
+                obj, created = WebPushSubscription.objects.update_or_create(endpoint=endpoint, defaults=defaults)
+            except Exception:
+                logging.exception('Failed to save web push subscription')
+                return Response({'detail': 'Unable to save subscription.'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+        return Response({'endpoint': obj.endpoint}, status=status.HTTP_201_CREATED if created else status.HTTP_200_OK)
+
+
+class PushSendAPIView(APIView):
+    """Trigger sending a web-push payload to stored subscriptions.
+
+    POST payload (optional): { title, message, app_user_only }
+    """
+
+    permission_classes = [IsAdminUser]
+
+    def post(self, request):
+        title = (request.data.get('title') or request.data.get('subject') or '').strip()
+        message = (request.data.get('message') or '').strip()
+        if not title and not message:
+            return Response({'detail': 'title or message is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        app_user_only = bool(request.data.get('app_user_only') or request.data.get('is_app_user'))
+
+        subs_qs = __import__('store.models', fromlist=['WebPushSubscription']).models.WebPushSubscription.objects.all()
+        if app_user_only:
+            subs_qs = subs_qs.filter(user__isnull=False)
+
+        subs = list(subs_qs)
+        sent = 0
+        for sub in subs:
+            subscription_info = {
+                'endpoint': sub.endpoint,
+                'keys': {
+                    'p256dh': sub.p256dh or '',
+                    'auth': sub.auth or '',
+                }
+            }
+            payload = {'title': title, 'message': message, 'source': 'server'}
+            if send_web_push(subscription_info, payload):
+                sent += 1
+
+        return Response({'message': 'Push send attempted', 'recipients': len(subs), 'sent': sent}, status=status.HTTP_200_OK)
 
 
 class BroadcastNotificationAPIView(APIView):
@@ -2228,6 +2518,30 @@ class BroadcastNotificationAPIView(APIView):
                         sent += len(chunk)
                 except Exception:
                     logging.exception('Failed to send push chunk')
+
+        # Also send Web Push (Push API) notifications to subscribed browsers
+        try:
+            from .models import WebPushSubscription
+            subs_qs = WebPushSubscription.objects.all()
+            # If broadcast is intended for app users only, filter by associated user
+            if bool(request.data.get('app_user_only') or request.data.get('is_app_user')):
+                subs_qs = subs_qs.filter(user__isnull=False)
+
+            subs = list(subs_qs)
+            web_sent = 0
+            for sub in subs:
+                subscription_info = {
+                    'endpoint': sub.endpoint,
+                    'keys': {
+                        'p256dh': sub.p256dh or '',
+                        'auth': sub.auth or '',
+                    }
+                }
+                payload = {'title': title, 'message': message, 'source': 'server', 'notification_type': notification_type}
+                if send_web_push(subscription_info, payload):
+                    web_sent += 1
+        except Exception:
+            logging.exception('Failed to send web-push broadcast')
 
         return Response({'message': 'Broadcast queued', 'recipients': len(users), 'tokens_sent': sent}, status=status.HTTP_200_OK)
 

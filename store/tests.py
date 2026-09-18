@@ -11,6 +11,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from backend import settings as backend_settings
 from .models import Brand, Category, Customer, Delivery, Notification, Order, OrderItem, Product, Receipt, Recipe
 from .views import generate_product_sku
+import os
 
 User = get_user_model()
 
@@ -37,6 +38,189 @@ class EmailConfigTests(TestCase):
                 backend_settings.resolve_email_backend(),
                 'django.core.mail.backends.smtp.EmailBackend',
             )
+
+
+class ConnectivityConfigTests(TestCase):
+    def test_parse_origin_list_includes_env_and_local_defaults(self):
+        value = 'https://app.example.com, http://localhost:5173'
+        parsed = backend_settings.parse_csv_env(value, default_values=[
+            'http://localhost:3000',
+            'http://127.0.0.1:3000',
+            'http://localhost:5173',
+            'http://127.0.0.1:5173',
+        ])
+        self.assertIn('https://app.example.com', parsed)
+        self.assertIn('http://localhost:5173', parsed)
+        self.assertIn('http://localhost:3000', parsed)
+        self.assertEqual(len(parsed), len(set(parsed)))
+
+
+class RegistrationRoleTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+
+    def test_customer_app_registration_defaults_to_customer_role(self):
+        response = self.client.post(
+            reverse('register'),
+            {
+                'first_name': 'Jane',
+                'last_name': 'Customer',
+                'email': 'customer-app@example.com',
+                'phone_number': '+256700000001',
+                'password': 'StrongPass123!',
+                'salon_name': 'Glow App Studio',
+                'location': 'Kampala, Uganda',
+            },
+            format='json',
+            HTTP_X_CLIENT_TYPE='customer',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['user']['role'], 'Customer')
+        self.assertTrue(Customer.objects.filter(user__email='customer-app@example.com').exists())
+
+
+
+class PushSubscriptionAndBroadcastTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+
+    def test_subscribe_and_broadcast_web_push(self):
+        # Post a dummy web push subscription (anonymous allowed)
+        subscription = {
+            'subscription': {
+                'endpoint': 'https://example.com/push/abc123',
+                'keys': {
+                    'p256dh': 'BKey',
+                    'auth': 'AuthKey',
+                }
+            }
+        }
+
+        resp = self.client.post(reverse('push_subscribe'), subscription, format='json')
+        self.assertIn(resp.status_code, (200, 201))
+
+        # Confirm subscription was stored
+        from .models import WebPushSubscription
+        self.assertTrue(WebPushSubscription.objects.filter(endpoint='https://example.com/push/abc123').exists())
+
+        # Create an admin user to trigger broadcast
+        admin_user = User.objects.create_user(
+            email='admin-broadcast@example.com',
+            password='StrongPass123!',
+            first_name='Admin',
+            last_name='Broadcast',
+            phone_number='0709999000',
+            is_staff=True,
+            is_superuser=True,
+            role='Admin',
+        )
+        token = str(RefreshToken.for_user(admin_user).access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        # Ensure VAPID keys are present in env for send_web_push to proceed in tests
+        with patch.dict(os.environ, {'VAPID_PUBLIC_KEY': 'test_pub', 'VAPID_PRIVATE_KEY': 'test_priv'}, clear=False):
+            # Ensure a dummy pywebpush module exists (test env may not have it)
+            import sys
+            from types import ModuleType
+            if 'pywebpush' not in sys.modules:
+                mod = ModuleType('pywebpush')
+                mod.webpush = lambda *a, **k: None
+                mod.WebPushException = Exception
+                sys.modules['pywebpush'] = mod
+
+            # Patch network push senders to avoid external calls
+            with patch('pywebpush.webpush', return_value=None) as mock_webpush, patch('store.views.urlopen') as mock_urlopen:
+                # urlopen should be callable and return an object with read()
+                class DummyResp:
+                    def read(self):
+                        return b'[]'
+
+                mock_urlopen.return_value = DummyResp()
+
+                payload = {'title': 'Test Broadcast', 'message': 'Hello subscribers!'}
+                broadcast_resp = self.client.post(reverse('broadcast_notifications'), payload, format='json')
+                self.assertEqual(broadcast_resp.status_code, 200)
+                self.assertIn('recipients', broadcast_resp.data)
+                # Ensure our mock was called for web-push path
+                self.assertTrue(mock_webpush.called)
+    def test_dashboard_registration_defaults_to_seller_role(self):
+        response = self.client.post(
+            reverse('register'),
+            {
+                'first_name': 'Karl',
+                'last_name': 'Seller',
+                'email': 'seller-dashboard@example.com',
+                'phone_number': '+256700000002',
+                'password': 'StrongPass123!',
+                'salon_name': 'Greenrock Seller Studio',
+            },
+            format='json',
+            HTTP_X_CLIENT_TYPE='seller',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['user']['role'], 'Seller')
+        self.assertFalse(Customer.objects.filter(user__email='seller-dashboard@example.com').exists())
+
+
+class NotificationSystemTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email='customer-notify@example.com',
+            password='StrongPass123!',
+            first_name='Jane',
+            last_name='Customer',
+            phone_number='+256700000020',
+            role='Customer',
+        )
+        self.client.force_authenticate(user=self.user)
+
+    def test_user_notifications_api_tracks_read_state_and_categories(self):
+        notification = Notification.objects.create(
+            user=self.user,
+            title='Order update',
+            message='Your delivery is on the way.',
+            notification_type='delivery_status',
+            channels=['in_app', 'push'],
+            is_read=False,
+        )
+
+        response = self.client.get(reverse('user_notifications'))
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(len(response.data) >= 1)
+        payload = response.data[0]
+        self.assertEqual(payload['notification_type'], 'delivery_status')
+        self.assertIn('channels', payload)
+        self.assertFalse(payload['is_read'])
+
+        mark_response = self.client.patch(
+            reverse('user_notification_read', kwargs={'notification_id': notification.id}),
+            {'is_read': True},
+            format='json',
+        )
+        self.assertEqual(mark_response.status_code, 200)
+        notification.refresh_from_db()
+        self.assertTrue(notification.is_read)
+        self.assertIsNotNone(notification.read_at)
+
+    def test_notification_campaign_supports_multiple_channels(self):
+        with patch('store.views._send_email_message', return_value=True) as mock_email, patch('store.views.send_web_push', return_value=True) as mock_push, patch('store.views.PushToken.objects.filter') as mock_filter, patch('store.views.WebPushSubscription.objects.all'):
+            token_obj = type('Token', (), {'token': 'ExponentPushToken[abc]', 'user': self.user})()
+            mock_filter.return_value.values_list.return_value.distinct.return_value = ['ExponentPushToken[abc]']
+
+            response = self.client.post(reverse('user_notification_campaign'), {
+                'title': 'New product arrival',
+                'message': 'Your favorite serum is back in stock.',
+                'notification_type': 'product_restock',
+                'channels': ['in_app', 'push', 'email'],
+            }, format='json')
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(Notification.objects.filter(user=self.user, notification_type='product_restock').count(), 1)
+            self.assertTrue(mock_email.called)
+            self.assertTrue(mock_push.called)
 
 
 class ProductSkuGenerationTests(TestCase):

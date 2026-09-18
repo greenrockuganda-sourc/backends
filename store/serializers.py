@@ -3,6 +3,7 @@ from rest_framework import serializers
 
 from .models import Brand, Category, Customer, Delivery, Notification, Order, Payment, Product, Receipt, Recipe, Review
 from .models import PushToken
+from .models import WebPushSubscription
 
 User = get_user_model()
 
@@ -28,7 +29,13 @@ class RegisterSerializer(serializers.ModelSerializer):
     def validate(self, attrs):
         email = str(attrs.get('email') or '').strip().lower()
         phone_number = str(attrs.get('phone_number') or '').strip()
-        role = attrs.get('role', 'Customer')
+        role = str(attrs.get('role') or 'Customer').strip()
+        normalized_role = role.title()
+        if normalized_role in {'Customer', 'Seller'}:
+            attrs['role'] = normalized_role
+        else:
+            attrs['role'] = 'Customer'
+        role = attrs['role']
 
         if not email and not phone_number:
             raise serializers.ValidationError('Enter an email address, a phone number, or both.')
@@ -275,10 +282,18 @@ class DeliveryUpdateSerializer(serializers.Serializer):
 
 class NotificationReadSerializer(serializers.Serializer):
     is_read = serializers.BooleanField(required=False)
+    channels = serializers.ListField(child=serializers.CharField(), required=False)
 
 
 class PushTokenSerializer(serializers.ModelSerializer):
     class Meta:
         model = PushToken
         fields = ['token', 'device_info']
+        read_only_fields = []
+
+
+class WebPushSubscriptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = WebPushSubscription
+        fields = ['endpoint', 'p256dh', 'auth']
         read_only_fields = []

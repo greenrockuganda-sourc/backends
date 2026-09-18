@@ -340,11 +340,22 @@ class Recipe(models.Model):
 
 
 class Notification(models.Model):
+    NOTIFICATION_TYPES = [
+        ('order_update', 'Order Update'),
+        ('delivery_status', 'Delivery Status'),
+        ('product_restock', 'Product Restock'),
+        ('promotion', 'Promotion'),
+        ('broadcast', 'Broadcast'),
+        ('new_arrival', 'New Arrival'),
+    ]
+
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='notifications')
     title = models.CharField(max_length=255)
     message = models.TextField()
-    notification_type = models.CharField(max_length=100, blank=True, null=True)
+    notification_type = models.CharField(max_length=100, blank=True, null=True, default='broadcast')
+    channels = models.JSONField(default=list, blank=True)
     is_read = models.BooleanField(default=False)
+    read_at = models.DateTimeField(blank=True, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -366,6 +377,27 @@ class PushToken(models.Model):
 
     def __str__(self):
         return f"{self.token} ({self.user.email if self.user else 'no-user'})"
+
+
+class WebPushSubscription(models.Model):
+    """Store browser Web Push subscriptions (Push API) for server-side web-push sends.
+
+    The frontend should POST the subscription JSON exactly as returned by
+    the browser: { endpoint, keys: { p256dh, auth } }.
+    """
+
+    user = models.ForeignKey(User, on_delete=models.SET_NULL, related_name='web_push_subscriptions', null=True, blank=True)
+    endpoint = models.TextField(unique=True)
+    p256dh = models.CharField(max_length=255, blank=True, null=True)
+    auth = models.CharField(max_length=255, blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'web_push_subscriptions'
+
+    def __str__(self):
+        return f"WebPush {self.endpoint[:64]}... ({self.user.email if self.user else 'no-user'})"
 
 
 class Review(models.Model):

@@ -80,6 +80,20 @@ def parse_database_url(database_url: str) -> dict:
     return db_config
 
 
+def parse_csv_env(value: str, default_values=None) -> list[str]:
+    defaults = list(default_values or [])
+    parsed_values = []
+    seen = set()
+
+    for candidate in defaults + [item.strip() for item in (value or '').split(',') if item.strip()]:
+        if not candidate or candidate in seen:
+            continue
+        parsed_values.append(candidate)
+        seen.add(candidate)
+
+    return parsed_values
+
+
 load_environment_file(BASE_DIR / '.env')
 
 
@@ -87,17 +101,26 @@ load_environment_file(BASE_DIR / '.env')
 SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-placeholder')
 DEBUG = get_bool_env('DEBUG', False)
 
-ALLOWED_HOSTS = [
-    host.strip()
-    for host in os.getenv('ALLOWED_HOSTS', 'localhost,127.0.0.1,testserver').split(',')
-    if host.strip()
-]
+ALLOWED_HOSTS = parse_csv_env(
+    os.getenv('ALLOWED_HOSTS', ''),
+    default_values=['localhost', '127.0.0.1', '0.0.0.0', '::1', 'testserver', '*.up.railway.app'],
+)
 
-CSRF_TRUSTED_ORIGINS = [
-    origin.strip()
-    for origin in os.getenv('CSRF_TRUSTED_ORIGINS', '').split(',')
-    if origin.strip()
+default_trusted_origins = [
+    'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'http://0.0.0.0:3000',
+    'http://0.0.0.0:5173',
+    'https://localhost:3000',
+    'https://127.0.0.1:3000',
+    'https://localhost:5173',
+    'https://127.0.0.1:5173',
+    'https://*.up.railway.app',
+    'http://*.up.railway.app',
 ]
+CSRF_TRUSTED_ORIGINS = parse_csv_env(os.getenv('CSRF_TRUSTED_ORIGINS', ''), default_values=default_trusted_origins)
 
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
@@ -193,6 +216,10 @@ EMAIL_TIMEOUT = int(os.getenv('EMAIL_TIMEOUT', '30'))
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '').strip()
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '').strip()
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'noreply@growsalon.com').strip()
+VAPID_PUBLIC_KEY = (os.getenv('VAPID_PUBLIC_KEY') or os.getenv('VITE_VAPID_PUBLIC_KEY') or '').strip()
+VAPID_PRIVATE_KEY = (os.getenv('VAPID_PRIVATE_KEY') or '').strip()
+APP_URL = os.getenv('APP_URL', 'http://localhost:3000').strip() or 'http://localhost:3000'
+FRONTEND_URL = os.getenv('FRONTEND_URL', APP_URL).strip() or APP_URL
 
 placeholder_values = {
     'replace_with_mailjet_smtp_user',
@@ -238,11 +265,20 @@ SIMPLE_JWT = {
 
 
 # CORS and cookie configuration
-CORS_ALLOWED_ORIGINS = [
+default_cors_origins = [
     'http://localhost:3000',
+    'http://127.0.0.1:3000',
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+    'http://0.0.0.0:3000',
+    'http://0.0.0.0:5173',
     'https://frontend-production-ae5e.up.railway.app',
     'https://backends-production-3d0b.up.railway.app',
+    'https://*.up.railway.app',
+    'http://*.up.railway.app',
 ]
+CORS_ALLOWED_ORIGINS = parse_csv_env(os.getenv('CORS_ALLOWED_ORIGINS', ''), default_values=default_cors_origins)
+CORS_ALLOWED_ORIGIN_REGEXES = [r'https://.*\.up\.railway\.app', r'http://.*\.up\.railway\.app']
 
 CORS_ALLOW_CREDENTIALS = True
 
@@ -258,20 +294,13 @@ CORS_ALLOW_HEADERS = [
     'x-requested-with',
 ]
 
-# CSRF trusted origins for cross-site POSTs (e.g., from the frontend)
-CSRF_TRUSTED_ORIGINS = [
-    'http://localhost:3000',
-    'https://frontend-production-ae5e.up.railway.app',
-    'https://backends-production-3d0b.up.railway.app',
-]
-
 # Cookie settings when using cookies for auth
 SESSION_COOKIE_HTTPONLY = True
-SESSION_COOKIE_SECURE = True
+SESSION_COOKIE_SECURE = get_bool_env('SESSION_COOKIE_SECURE', not DEBUG)
 SESSION_COOKIE_SAMESITE = 'None'
 
 CSRF_COOKIE_HTTPONLY = False
-CSRF_COOKIE_SECURE = True
+CSRF_COOKIE_SECURE = get_bool_env('CSRF_COOKIE_SECURE', not DEBUG)
 CSRF_COOKIE_SAMESITE = 'None'
 
 
