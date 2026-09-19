@@ -13,6 +13,15 @@ from urllib.parse import unquote, urlparse
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
+def sanitize_env_value(value: str | None) -> str:
+    if value is None:
+        return ''
+    cleaned = value.strip().replace('\r', '')
+    if '\n' in cleaned:
+        cleaned = cleaned.split('\n', 1)[0].strip()
+    return cleaned.strip('"').strip("'")
+
+
 def load_environment_file(env_path: Path) -> None:
     if not env_path.exists():
         return
@@ -24,7 +33,7 @@ def load_environment_file(env_path: Path) -> None:
 
         key, value = line.split('=', 1)
         key = key.strip()
-        value = value.strip().strip('"').strip("'")
+        value = sanitize_env_value(value)
         os.environ[key] = value
 
 
@@ -36,8 +45,8 @@ def get_bool_env(key: str, default: bool = False) -> bool:
 
 
 def resolve_email_backend() -> str:
-    configured_backend = os.getenv('EMAIL_BACKEND')
-    if configured_backend:
+    configured_backend = sanitize_env_value(os.getenv('EMAIL_BACKEND'))
+    if configured_backend and configured_backend.startswith('django.core.mail.backends.'):
         return configured_backend
 
     if os.getenv('EMAIL_HOST_USER') and os.getenv('EMAIL_HOST_PASSWORD'):

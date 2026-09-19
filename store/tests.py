@@ -39,6 +39,17 @@ class EmailConfigTests(TestCase):
                 'django.core.mail.backends.smtp.EmailBackend',
             )
 
+    def test_resolve_email_backend_ignores_multiline_env_values(self):
+        with patch.dict('os.environ', {
+            'EMAIL_BACKEND': 'django.core.mail.backends.smtp.EmailBackend\nEMAIL_HOST=smtp-relay.brevo.com',
+            'EMAIL_HOST_USER': 'mail@example.com',
+            'EMAIL_HOST_PASSWORD': 'secret',
+        }, clear=False):
+            self.assertEqual(
+                backend_settings.resolve_email_backend(),
+                'django.core.mail.backends.smtp.EmailBackend',
+            )
+
 
 class ConnectivityConfigTests(TestCase):
     def test_parse_origin_list_includes_env_and_local_defaults(self):
