@@ -25,7 +25,7 @@ def load_environment_file(env_path: Path) -> None:
         key, value = line.split('=', 1)
         key = key.strip()
         value = value.strip().strip('"').strip("'")
-        os.environ.setdefault(key, value)
+        os.environ[key] = value
 
 
 def get_bool_env(key: str, default: bool = False) -> bool:
@@ -94,7 +94,8 @@ def parse_csv_env(value: str, default_values=None) -> list[str]:
     return parsed_values
 
 
-load_environment_file(BASE_DIR / '.env')
+for env_file in (BASE_DIR / '.env', BASE_DIR / '.env.local'):
+    load_environment_file(env_file)
 
 
 # Quick-start development settings - unsuitable for production

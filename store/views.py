@@ -1822,6 +1822,8 @@ class CustomerEmailCampaignAPIView(APIView):
                 if email and email not in seen:
                     seen.add(email)
                     unique_emails.append(email)
+            if not unique_emails:
+                return Response({'detail': 'No valid customer email recipients were found for this campaign.'}, status=status.HTTP_400_BAD_REQUEST)
             sent = 0
             for email in unique_emails:
                 if _send_email_message(email, subject, f'<p>{message}</p>'):
@@ -1850,6 +1852,9 @@ class CustomerEmailCampaignAPIView(APIView):
             if email not in seen:
                 seen.add(email)
                 unique_emails.append(email)
+
+        if not unique_emails:
+            return Response({'detail': 'No valid customer email recipients were found for this campaign.'}, status=status.HTTP_400_BAD_REQUEST)
 
         sent = 0
         for email in unique_emails:
