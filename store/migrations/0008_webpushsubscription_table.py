@@ -12,7 +12,7 @@ def create_web_push_table_if_missing(apps, schema_editor):
                 auth VARCHAR(255),
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                user_id BIGINT NULL REFERENCES auth_user(id) ON DELETE SET NULL
+                user_id BIGINT NULL REFERENCES users(id) ON DELETE SET NULL
             );
         """)
     elif vendor == 'sqlite':
@@ -24,7 +24,7 @@ def create_web_push_table_if_missing(apps, schema_editor):
                 auth VARCHAR(255),
                 created_at DATETIME NOT NULL,
                 updated_at DATETIME NOT NULL,
-                user_id BIGINT NULL REFERENCES auth_user(id) ON DELETE SET NULL
+                user_id BIGINT NULL REFERENCES users(id) ON DELETE SET NULL
             );
         """)
     else:
