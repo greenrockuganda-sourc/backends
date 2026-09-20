@@ -218,11 +218,15 @@ USE_TZ = True
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
-EMAIL_HOST = os.getenv('EMAIL_HOST', 'in-v3.mailjet.com').strip() or 'in-v3.mailjet.com'
+EMAIL_HOST = os.getenv('EMAIL_HOST', 'smtp-relay.brevo.com').strip() or 'smtp-relay.brevo.com'
 EMAIL_PORT = int(os.getenv('EMAIL_PORT', '587'))
 EMAIL_USE_TLS = get_bool_env('EMAIL_USE_TLS', True)
 EMAIL_USE_SSL = get_bool_env('EMAIL_USE_SSL', False)
-EMAIL_TIMEOUT = int(os.getenv('EMAIL_TIMEOUT', '30'))
+# Keep SMTP connection attempts below Gunicorn's default 30-second worker
+# timeout.  A healthy Brevo SMTP connection is established in a few seconds;
+# a longer timeout only causes the request worker to be killed when port 587
+# is blocked by the hosting network.
+EMAIL_TIMEOUT = min(max(int(os.getenv('EMAIL_TIMEOUT', '10')), 1), 10)
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '').strip()
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '').strip()
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'noreply@growsalon.com').strip()
@@ -232,10 +236,10 @@ APP_URL = os.getenv('APP_URL', 'http://localhost:3000').strip() or 'http://local
 FRONTEND_URL = os.getenv('FRONTEND_URL', APP_URL).strip() or APP_URL
 
 placeholder_values = {
-    'replace_with_mailjet_smtp_user',
-    'replace_with_mailjet_smtp_password',
-    'your_mailjet_smtp_user',
-    'your_mailjet_smtp_password',
+    'replace_with_brevo_smtp_user',
+    'replace_with_brevo_smtp_password',
+    'your_brevo_smtp_user',
+    'your_brevo_smtp_password',
     'your_verified_sender@example.com',
     'noreply@growsalon.com',
 }

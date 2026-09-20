@@ -23,7 +23,7 @@ from django.db.models import F, Q, Sum
 from django.http import FileResponse, HttpResponse
 from django.template.loader import render_to_string
 from django.conf import settings
-from django.core.mail import EmailMessage
+from django.core.mail import EmailMessage, get_connection
 from django.core.validators import ValidationError, validate_email
 from email.mime.image import MIMEImage
 import tempfile
@@ -590,6 +590,63 @@ def _send_email_message(to_email, subject, html_content, attachments=None, reply
         logger = logging.getLogger(__name__)
         logger.exception('Failed to send email to %s with subject "%s".', email, subject)
         return False
+
+
+def _send_email_campaign_messages(recipients, subject, html_content, reply_to=None):
+    """Send a campaign over one SMTP connection and return the sent count.
+
+    Opening an SMTP connection per recipient is slow and can exceed a web
+    worker timeout for a campaign.  Reusing the connection also lets a bad
+    recipient fail without stopping delivery to the remaining recipients.
+    """
+    logger = logging.getLogger(__name__)
+    valid_recipients = []
+
+    for recipient in recipients:
+        email = (recipient or '').strip()
+        if not email:
+            continue
+        try:
+            validate_email(email)
+        except ValidationError:
+            logger.warning('Skipping campaign email because %s is not a valid email address.', email)
+            continue
+        valid_recipients.append(email)
+
+    if not valid_recipients:
+        return 0
+
+    connection = get_connection(fail_silently=False)
+    try:
+        connection.open()
+    except Exception:
+        logger.exception('Failed to open SMTP connection for customer email campaign.')
+        return 0
+
+    sent = 0
+    try:
+        for email in valid_recipients:
+            try:
+                message = EmailMessage(
+                    subject=subject,
+                    body=html_content,
+                    from_email=getattr(settings, 'DEFAULT_FROM_EMAIL', None),
+                    to=[email],
+                    reply_to=reply_to or [getattr(settings, 'DEFAULT_FROM_EMAIL', '')],
+                    connection=connection,
+                )
+                message.content_subtype = 'html'
+                message.send(fail_silently=False)
+                sent += 1
+            except Exception:
+                logger.exception('Failed to send campaign email to %s with subject "%s".', email, subject)
+    finally:
+        try:
+            connection.close()
+        except Exception:
+            logger.exception('Failed to close SMTP connection after customer email campaign.')
+
+    return sent
 
 
 def _send_order_status_email(order, subject, message):
@@ -1808,8 +1865,16 @@ class CustomerEmailCampaignAPIView(APIView):
         if not message:
             return Response({'detail': 'Message is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        explicit_recipients = request.data.get('recipients') or request.data.get('customer_email') or request.data.get('email')
-        if explicit_recipients:
+        recipient_fields = ('recipients', 'customer_email', 'email')
+        has_explicit_recipients = any(field in request.data for field in recipient_fields)
+        explicit_recipients = (
+            request.data.get('recipients')
+            if 'recipients' in request.data
+            else request.data.get('customer_email')
+            if 'customer_email' in request.data
+            else request.data.get('email')
+        )
+        if has_explicit_recipients:
             if isinstance(explicit_recipients, str):
                 email_list = [value.strip() for value in explicit_recipients.split(',') if value.strip()]
             elif isinstance(explicit_recipients, (list, tuple)):
@@ -1824,11 +1889,13 @@ class CustomerEmailCampaignAPIView(APIView):
                     unique_emails.append(email)
             if not unique_emails:
                 return Response({'detail': 'No valid customer email recipients were found for this campaign.'}, status=status.HTTP_400_BAD_REQUEST)
-            sent = 0
-            for email in unique_emails:
-                if _send_email_message(email, subject, f'<p>{message}</p>'):
-                    sent += 1
-            return Response({'message': 'Campaign email sent.', 'sent': sent, 'recipients': len(unique_emails)}, status=status.HTTP_200_OK)
+            sent = _send_email_campaign_messages(unique_emails, subject, f'<p>{message}</p>')
+            return Response({
+                'message': 'Campaign email sent.',
+                'sent': sent,
+                'failed': len(unique_emails) - sent,
+                'recipients': len(unique_emails),
+            }, status=status.HTTP_200_OK)
 
         target = str(request.data.get('target') or request.data.get('segment') or 'all').strip().lower()
         app_user_only = bool(request.data.get('app_user_only') or request.data.get('is_app_user'))
@@ -1856,11 +1923,13 @@ class CustomerEmailCampaignAPIView(APIView):
         if not unique_emails:
             return Response({'detail': 'No valid customer email recipients were found for this campaign.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        sent = 0
-        for email in unique_emails:
-            if _send_email_message(email, subject, f'<p>{message}</p>'):
-                sent += 1
-        return Response({'message': 'Campaign email sent.', 'sent': sent, 'recipients': len(unique_emails)}, status=status.HTTP_200_OK)
+        sent = _send_email_campaign_messages(unique_emails, subject, f'<p>{message}</p>')
+        return Response({
+            'message': 'Campaign email sent.',
+            'sent': sent,
+            'failed': len(unique_emails) - sent,
+            'recipients': len(unique_emails),
+        }, status=status.HTTP_200_OK)
 
 
 class CustomerPushBroadcastAPIView(APIView):

@@ -480,6 +480,49 @@ class CustomerUserAndCampaignAPITests(TestCase):
         self.assertIn('sent', response.data)
         self.assertEqual(len(mail.outbox), 1)
 
+    @override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend')
+    def test_customer_email_campaign_accepts_one_or_many_explicit_recipients(self):
+        second_user = User.objects.create_user(
+            email='second-customer@example.com',
+            password='StrongPass123!',
+            first_name='Second',
+            last_name='Customer',
+            phone_number='0701234568',
+            role='Customer',
+        )
+
+        single_response = self.client.post(reverse('customer_email_campaign'), {
+            'subject': 'Single customer update',
+            'message': 'A single-recipient campaign.',
+            'email': self.customer_user.email,
+        }, format='json')
+
+        self.assertEqual(single_response.status_code, 200)
+        self.assertEqual(single_response.data['recipients'], 1)
+        self.assertEqual(single_response.data['sent'], 1)
+        self.assertEqual(single_response.data['failed'], 0)
+
+        multiple_response = self.client.post(reverse('customer_email_campaign'), {
+            'subject': 'Multiple customer update',
+            'message': 'A multiple-recipient campaign.',
+            'recipients': [self.customer_user.email, second_user.email, self.customer_user.email],
+        }, format='json')
+
+        self.assertEqual(multiple_response.status_code, 200)
+        self.assertEqual(multiple_response.data['recipients'], 2)
+        self.assertEqual(multiple_response.data['sent'], 2)
+        self.assertEqual(multiple_response.data['failed'], 0)
+        self.assertEqual(len(mail.outbox), 3)
+
+        empty_response = self.client.post(reverse('customer_email_campaign'), {
+            'subject': 'Do not send',
+            'message': 'An empty recipient list must not become an all-customer campaign.',
+            'recipients': [],
+        }, format='json')
+
+        self.assertEqual(empty_response.status_code, 400)
+        self.assertEqual(len(mail.outbox), 3)
+
     def test_push_broadcast_route_accepts_customer_notifications(self):
         response = self.client.post(reverse('customer_push_broadcast'), {
             'title': 'New arrival',
