@@ -40,6 +40,21 @@ const serveFile = async (filePath, res) => {
 
 createServer(async (req, res) => {
   const requestPath = new URL(req.url, `http://localhost:${port}`).pathname
+
+  // Railway injects this public value at container start, so the VAPID key can
+  // be rotated without rebuilding the dashboard.
+  if (requestPath === '/runtime-config.js') {
+    const config = {
+      vapidPublicKey: process.env.VAPID_PUBLIC_KEY || process.env.VITE_VAPID_PUBLIC_KEY || '',
+    }
+    res.writeHead(200, {
+      'Content-Type': 'application/javascript; charset=utf-8',
+      'Cache-Control': 'no-store',
+    })
+    res.end(`window.__GLOW_RUNTIME_CONFIG__ = ${JSON.stringify(config)};`)
+    return
+  }
+
   let filePath = path.join(distDir, requestPath)
 
   if (requestPath === '/' || requestPath === '') {

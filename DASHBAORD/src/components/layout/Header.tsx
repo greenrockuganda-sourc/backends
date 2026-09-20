@@ -6,10 +6,20 @@ interface HeaderProps {
   user?: any
   onLogout: () => void
   onProfileClick?: () => void
+  notifications?: any[]
+  onNotificationRead?: (notificationId: string) => void
+  onEnableBrowserPush?: () => void
+  onCustomerBroadcast?: (title: string, message: string) => Promise<{ recipients: number }>
 }
 
-export default function Header({ onMenuClick, user, onLogout, onProfileClick }: HeaderProps) {
+export default function Header({ onMenuClick, user, onLogout, onProfileClick, notifications = [], onNotificationRead, onEnableBrowserPush, onCustomerBroadcast }: HeaderProps) {
   const [showUserMenu, setShowUserMenu] = useState(false)
+  const [showNotifications, setShowNotifications] = useState(false)
+  const [showBroadcastForm, setShowBroadcastForm] = useState(false)
+  const [broadcastTitle, setBroadcastTitle] = useState('')
+  const [broadcastMessage, setBroadcastMessage] = useState('')
+  const [broadcastStatus, setBroadcastStatus] = useState('')
+  const [sendingBroadcast, setSendingBroadcast] = useState(false)
 
   const displayName = user ? [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email || 'Seller' : 'Seller'
   const initials = (displayName || 'S')
@@ -18,6 +28,23 @@ export default function Header({ onMenuClick, user, onLogout, onProfileClick }: 
     .slice(0, 2)
     .join('')
     .toUpperCase()
+  const unreadNotifications = notifications.filter((notification) => !notification.is_read)
+
+  const submitBroadcast = async () => {
+    if (!broadcastTitle.trim() || !broadcastMessage.trim() || !onCustomerBroadcast) return
+    setSendingBroadcast(true)
+    setBroadcastStatus('')
+    try {
+      const result = await onCustomerBroadcast(broadcastTitle.trim(), broadcastMessage.trim())
+      setBroadcastStatus(`Sent to ${result.recipients} customer${result.recipients === 1 ? '' : 's'}.`)
+      setBroadcastTitle('')
+      setBroadcastMessage('')
+    } catch {
+      setBroadcastStatus('Unable to send customer notification.')
+    } finally {
+      setSendingBroadcast(false)
+    }
+  }
 
   return (
     <header className="sticky-header border-b border-blue-800 bg-blue-900 px-3 py-2 sm:px-6 sm:py-3">
@@ -42,10 +69,72 @@ export default function Header({ onMenuClick, user, onLogout, onProfileClick }: 
         </div>
 
         <div className="flex items-center gap-1 sm:gap-4">
-          <button className="relative p-2 text-blue-100 hover:bg-blue-800 rounded-lg transition-colors" aria-label="Notifications">
-            <Bell size={20} />
-            <span className="absolute top-1 right-1 w-2 h-2 bg-red-400 rounded-full"></span>
-          </button>
+          <div className="relative">
+            <button
+              onClick={() => setShowNotifications(!showNotifications)}
+              className="relative p-2 text-blue-100 hover:bg-blue-800 rounded-lg transition-colors"
+              aria-label="Notifications"
+            >
+              <Bell size={20} />
+              {unreadNotifications.length > 0 && <span className="absolute top-1 right-1 w-2 h-2 bg-red-400 rounded-full" />}
+            </button>
+            {showNotifications && (
+              <div className="absolute right-0 mt-2 max-h-96 w-80 overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-lg z-50">
+                <div className="border-b border-gray-100 px-4 py-3 text-sm font-semibold text-gray-900">Notifications</div>
+                {typeof Notification !== 'undefined' && Notification.permission !== 'granted' && (
+                  <button
+                    onClick={onEnableBrowserPush}
+                    className="m-3 w-[calc(100%-1.5rem)] rounded-lg bg-blue-700 px-3 py-2 text-xs font-semibold text-white hover:bg-blue-800"
+                  >
+                    Enable background alerts
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowBroadcastForm(!showBroadcastForm)}
+                  className="mx-3 mb-3 w-[calc(100%-1.5rem)] rounded-lg border border-blue-200 px-3 py-2 text-xs font-semibold text-blue-700 hover:bg-blue-50"
+                >
+                  Notify customers
+                </button>
+                {showBroadcastForm && (
+                  <div className="border-y border-gray-100 bg-gray-50 p-3">
+                    <input
+                      value={broadcastTitle}
+                      onChange={(event) => setBroadcastTitle(event.target.value)}
+                      placeholder="Notification title"
+                      className="mb-2 w-full rounded border border-gray-300 px-2 py-1.5 text-xs"
+                    />
+                    <textarea
+                      value={broadcastMessage}
+                      onChange={(event) => setBroadcastMessage(event.target.value)}
+                      placeholder="Message for all customers"
+                      rows={3}
+                      className="mb-2 w-full rounded border border-gray-300 px-2 py-1.5 text-xs"
+                    />
+                    <button
+                      disabled={sendingBroadcast || !broadcastTitle.trim() || !broadcastMessage.trim()}
+                      onClick={() => void submitBroadcast()}
+                      className="w-full rounded bg-blue-700 px-3 py-2 text-xs font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+                    >
+                      {sendingBroadcast ? 'Sending…' : 'Send to customers'}
+                    </button>
+                    {broadcastStatus && <p className="mt-2 text-xs text-gray-600">{broadcastStatus}</p>}
+                  </div>
+                )}
+                {notifications.length === 0 ? (
+                  <p className="px-4 py-6 text-center text-sm text-gray-500">No notifications yet.</p>
+                ) : notifications.slice(0, 20).map((notification) => (
+                  <button
+                    key={notification.id}
+                    onClick={() => onNotificationRead?.(String(notification.id))}
+                    className={`block w-full border-b border-gray-100 px-4 py-3 text-left hover:bg-blue-50 ${notification.is_read ? 'bg-white' : 'bg-blue-50/70'}`}
+                  >
+                    <p className="text-sm font-semibold text-gray-900">{notification.title}</p>
+                    <p className="mt-1 text-xs text-gray-600">{notification.message}</p>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
 
           <div className="relative">
             <button

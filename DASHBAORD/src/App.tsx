@@ -9,7 +9,8 @@ import Receipts from '@/pages/Receipts'
 import Reports from '@/pages/Reports'
 import Settings from '@/pages/Settings'
 import Login from '@/pages/Login'
-import { fetchProfile, registerAuthTokenUpdater } from '@/lib/api'
+import { fetchNotifications, fetchProfile, markNotificationRead, registerAuthTokenUpdater, sendCustomerPushBroadcast } from '@/lib/api'
+import { enableBrowserPushNotifications } from '@/lib/web-push'
 import { ToastContainer } from 'react-toastify'
 import 'react-toastify/dist/ReactToastify.css'
 import { UserProfile } from '@/types'
@@ -38,7 +39,8 @@ export default function App() {
   const [loadingProfile, setLoadingProfile] = useState(false)
   const [profileError, setProfileError] = useState<string | null>(null)
   const [showMoreMenu, setShowMoreMenu] = useState(false)
-  const { notifications, dismissNotification } = useNotifications()
+  const [serverNotifications, setServerNotifications] = useState<any[]>([])
+  const { notifications, dismissNotification, addNotification } = useNotifications()
 
   useEffect(() => {
     registerAuthTokenUpdater((token) => {
@@ -78,6 +80,50 @@ export default function App() {
     }
   }, [accessToken])
 
+  useEffect(() => {
+    if (!accessToken) return
+    if (Notification.permission === 'granted') {
+      void enableBrowserPushNotifications(accessToken).catch(() => undefined)
+    }
+  }, [accessToken])
+
+  useEffect(() => {
+    if (!accessToken) return
+
+    let active = true
+    let initialized = false
+    let knownNotificationIds = new Set<string>()
+    const syncNotifications = async () => {
+      try {
+        const serverNotifications = await fetchNotifications(accessToken)
+        if (!active) return
+        setServerNotifications(serverNotifications)
+        const unread = serverNotifications.filter((notification) => !notification.is_read)
+        if (initialized) {
+          unread
+            .filter((notification) => !knownNotificationIds.has(String(notification.id)))
+            .forEach((notification) => addNotification({
+              type: notification.notification_type === 'order' ? 'success' : 'info',
+              title: notification.title,
+              message: notification.message,
+              duration: 6000,
+            }))
+        }
+        knownNotificationIds = new Set(serverNotifications.map((notification) => String(notification.id)))
+        initialized = true
+      } catch {
+        // A transient polling failure should not interrupt dashboard use.
+      }
+    }
+
+    void syncNotifications()
+    const intervalId = window.setInterval(syncNotifications, 15000)
+    return () => {
+      active = false
+      window.clearInterval(intervalId)
+    }
+  }, [accessToken, addNotification])
+
   const handleLogin = (newAccessToken: string, refreshToken: string, profile: UserProfile) => {
     localStorage.setItem('access', newAccessToken)
     localStorage.setItem('refresh', refreshToken)
@@ -98,6 +144,7 @@ export default function App() {
     setAccessToken(null)
     setUser(null)
     setProfileError(null)
+    setServerNotifications([])
     setShowMoreMenu(false)
   }
 
@@ -105,6 +152,31 @@ export default function App() {
     setCurrentPage(page)
     setSidebarOpen(false)
     setShowMoreMenu(false)
+  }
+
+  const handleNotificationRead = async (notificationId: string) => {
+    if (!accessToken) return
+    try {
+      await markNotificationRead(accessToken, notificationId)
+      setServerNotifications((current) => current.map((notification) => (
+        String(notification.id) === notificationId
+          ? { ...notification, is_read: true }
+          : notification
+      )))
+    } catch {
+      // Keep the notification visible if the server cannot update it.
+    }
+  }
+
+  const handleEnableBrowserPush = () => {
+    if (accessToken) {
+      void enableBrowserPushNotifications(accessToken).catch(() => undefined)
+    }
+  }
+
+  const handleCustomerBroadcast = async (title: string, message: string) => {
+    if (!accessToken) throw new Error('Please sign in again.')
+    return sendCustomerPushBroadcast(accessToken, title, message)
   }
 
   if (!accessToken) {
@@ -157,7 +229,16 @@ export default function App() {
       />
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <Header onMenuClick={() => setSidebarOpen(!sidebarOpen)} user={user} onLogout={handleLogout} onProfileClick={() => handleNavigate('settings')} />
+        <Header
+          onMenuClick={() => setSidebarOpen(!sidebarOpen)}
+          user={user}
+          onLogout={handleLogout}
+          onProfileClick={() => handleNavigate('settings')}
+          notifications={serverNotifications}
+          onNotificationRead={handleNotificationRead}
+          onEnableBrowserPush={handleEnableBrowserPush}
+          onCustomerBroadcast={handleCustomerBroadcast}
+        />
         <main className="flex-1 overflow-y-auto overflow-x-hidden pb-20 lg:pb-0">
           {loadingProfile && (
             <div className="px-4 py-3 text-sm text-slate-600">Loading your account details...</div>

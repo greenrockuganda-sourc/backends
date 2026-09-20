@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? ''
 
 let authTokenUpdater: ((token: string | null) => void) | null = null
 
@@ -97,6 +97,35 @@ export async function register(userData: { first_name: string; last_name: string
 
 export async function fetchProfile(token: string) {
   return request<any>('/api/user/profile/', {}, token)
+}
+
+export async function fetchNotifications(token: string) {
+  return request<any[]>('/api/notifications/', {}, token)
+}
+
+export async function markNotificationRead(token: string, notificationId: string) {
+  return request<any>(`/api/notifications/${notificationId}/read/`, {
+    method: 'PATCH',
+    body: JSON.stringify({ is_read: true }),
+  }, token)
+}
+
+export async function registerBrowserPushSubscription(token: string, subscription: PushSubscriptionJSON) {
+  return request<any>('/api/push/subscribe/', {
+    method: 'POST',
+    body: JSON.stringify({ subscription }),
+  }, token)
+}
+
+export async function sendCustomerPushBroadcast(token: string, title: string, message: string) {
+  return request<{ recipients: number; tokens_sent: number; browser_push_sent: number }>(
+    '/api/admin/customers/push-broadcast/',
+    {
+      method: 'POST',
+      body: JSON.stringify({ title, message, notification_type: 'broadcast' }),
+    },
+    token,
+  )
 }
 
 export async function updateProfile(token: string, profileData: { first_name?: string; last_name?: string; phone_number?: string; profile_image?: string }) {

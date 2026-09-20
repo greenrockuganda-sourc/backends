@@ -181,6 +181,25 @@ pnpm preview
 # Output will be in the dist/ directory
 ```
 
+### Background push notifications
+
+Configure the same public VAPID key in both Railway services. Keep the private
+key on the backend only:
+
+```env
+# Backend service
+VAPID_PUBLIC_KEY=your_vapid_public_key
+VAPID_PRIVATE_KEY=your_vapid_private_key
+
+# Dashboard service
+VAPID_PUBLIC_KEY=your_vapid_public_key
+```
+
+After a seller signs in, they can open the notification bell and select
+**Enable background alerts**. Their browser subscription is saved to their
+seller account. New customer orders then appear in the dashboard and produce a
+background notification even when the dashboard tab is closed.
+
 ## Technologies Used
 
 - **Framework**: React 19
