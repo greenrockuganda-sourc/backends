@@ -230,6 +230,12 @@ EMAIL_TIMEOUT = min(max(int(os.getenv('EMAIL_TIMEOUT', '10')), 1), 10)
 EMAIL_HOST_USER = os.getenv('EMAIL_HOST_USER', '').strip()
 EMAIL_HOST_PASSWORD = os.getenv('EMAIL_HOST_PASSWORD', '').strip()
 DEFAULT_FROM_EMAIL = os.getenv('DEFAULT_FROM_EMAIL', 'noreply@growsalon.com').strip()
+# Railway cannot always open outbound SMTP connections.  When this separate
+# API key is configured, email is sent through Brevo's HTTPS API instead of
+# SMTP, using the normal HTTPS port (443).
+BREVO_API_KEY = os.getenv('BREVO_API_KEY', '').strip()
+BREVO_API_URL = os.getenv('BREVO_API_URL', 'https://api.brevo.com/v3/smtp/email').strip()
+BREVO_API_TIMEOUT = min(max(int(os.getenv('BREVO_API_TIMEOUT', '10')), 1), 10)
 VAPID_PUBLIC_KEY = (os.getenv('VAPID_PUBLIC_KEY') or os.getenv('VITE_VAPID_PUBLIC_KEY') or '').strip()
 VAPID_PRIVATE_KEY = (os.getenv('VAPID_PRIVATE_KEY') or '').strip()
 APP_URL = os.getenv('APP_URL', 'http://localhost:3000').strip() or 'http://localhost:3000'

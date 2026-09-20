@@ -8,6 +8,7 @@ import os
 import re
 from datetime import timedelta
 from decimal import Decimal
+from email.utils import parseaddr
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
@@ -568,6 +569,9 @@ def _send_email_message(to_email, subject, html_content, attachments=None, reply
         logging.getLogger(__name__).warning('Skipping email send because %s is not a valid email address.', email)
         return False
 
+    if getattr(settings, 'BREVO_API_KEY', ''):
+        return _send_brevo_api_message(email, subject, html_content, attachments=attachments, reply_to=reply_to)
+
     try:
         message = EmailMessage(
             subject=subject,
@@ -590,6 +594,87 @@ def _send_email_message(to_email, subject, html_content, attachments=None, reply
         logger = logging.getLogger(__name__)
         logger.exception('Failed to send email to %s with subject "%s".', email, subject)
         return False
+
+
+def _build_brevo_api_payload(subject, html_content, reply_to=None):
+    sender_name, sender_email = parseaddr(getattr(settings, 'DEFAULT_FROM_EMAIL', ''))
+    sender_email = sender_email or getattr(settings, 'DEFAULT_FROM_EMAIL', '')
+    payload = {
+        'sender': {'email': sender_email},
+        'subject': subject,
+        'htmlContent': html_content,
+    }
+    if sender_name:
+        payload['sender']['name'] = sender_name
+
+    reply_to_email = (reply_to or [sender_email])[0] if reply_to or sender_email else ''
+    if reply_to_email:
+        payload['replyTo'] = {'email': reply_to_email}
+    return payload
+
+
+def _post_brevo_api_payload(payload, recipient_description):
+    logger = logging.getLogger(__name__)
+    request = Request(
+        getattr(settings, 'BREVO_API_URL', 'https://api.brevo.com/v3/smtp/email'),
+        data=json.dumps(payload).encode('utf-8'),
+        headers={
+            'Accept': 'application/json',
+            'Content-Type': 'application/json',
+            'api-key': settings.BREVO_API_KEY,
+        },
+        method='POST',
+    )
+    try:
+        response = urlopen(request, timeout=getattr(settings, 'BREVO_API_TIMEOUT', 10))
+        status_code = getattr(response, 'status', None)
+        if status_code is None:
+            status_code = response.getcode()
+        if 200 <= status_code < 300:
+            return True
+        logger.error('Brevo API rejected email to %s with HTTP status %s.', recipient_description, status_code)
+    except Exception:
+        logger.exception('Failed to send Brevo API email to %s.', recipient_description)
+    return False
+
+
+def _send_brevo_api_message(to_email, subject, html_content, attachments=None, reply_to=None):
+    """Send one transactional email through Brevo's HTTPS API."""
+    payload = _build_brevo_api_payload(subject, html_content, reply_to=reply_to)
+    payload['to'] = [{'email': to_email}]
+
+    api_attachments = []
+    for attachment in attachments or []:
+        if not (isinstance(attachment, tuple) and len(attachment) == 3):
+            continue
+        filename, content, _mime_type = attachment
+        if isinstance(content, str):
+            content = content.encode('utf-8')
+        api_attachments.append({
+            'name': filename,
+            'content': base64.b64encode(content).decode('ascii'),
+        })
+    if api_attachments:
+        payload['attachment'] = api_attachments
+
+    return _post_brevo_api_payload(payload, to_email)
+
+
+def _send_brevo_api_campaign_messages(recipients, subject, html_content, reply_to=None):
+    """Send private campaign copies in Brevo's batch API format."""
+    sent = 0
+    # Brevo permits up to 2,000 recipients per request.  Each message version
+    # has one recipient so customer addresses are never exposed to one another.
+    for start in range(0, len(recipients), 2000):
+        recipient_batch = recipients[start:start + 2000]
+        payload = _build_brevo_api_payload(subject, html_content, reply_to=reply_to)
+        payload['messageVersions'] = [
+            {'to': [{'email': email}]}
+            for email in recipient_batch
+        ]
+        if _post_brevo_api_payload(payload, f'{len(recipient_batch)} campaign recipient(s)'):
+            sent += len(recipient_batch)
+    return sent
 
 
 def _send_email_campaign_messages(recipients, subject, html_content, reply_to=None):
@@ -615,6 +700,9 @@ def _send_email_campaign_messages(recipients, subject, html_content, reply_to=No
 
     if not valid_recipients:
         return 0
+
+    if getattr(settings, 'BREVO_API_KEY', ''):
+        return _send_brevo_api_campaign_messages(valid_recipients, subject, html_content, reply_to=reply_to)
 
     connection = get_connection(fail_silently=False)
     try:

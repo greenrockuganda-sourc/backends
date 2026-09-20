@@ -1,3 +1,4 @@
+import json
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
@@ -49,6 +50,36 @@ class EmailConfigTests(TestCase):
                 backend_settings.resolve_email_backend(),
                 'django.core.mail.backends.smtp.EmailBackend',
             )
+
+    @override_settings(
+        BREVO_API_KEY='test-brevo-api-key',
+        DEFAULT_FROM_EMAIL='Glow <noreply@example.com>',
+    )
+    @patch('store.views.urlopen')
+    def test_brevo_https_api_sends_a_private_email_per_recipient(self, mock_urlopen):
+        mock_urlopen.return_value.status = 201
+        from store.views import _send_brevo_api_message, _send_email_campaign_messages
+
+        self.assertTrue(_send_brevo_api_message(
+            'one@example.com',
+            'Test subject',
+            '<p>Test body</p>',
+        ))
+        sent = _send_email_campaign_messages(
+            ['one@example.com', 'two@example.com'],
+            'Campaign subject',
+            '<p>Campaign body</p>',
+        )
+
+        self.assertEqual(sent, 2)
+        self.assertEqual(mock_urlopen.call_count, 2)
+        single_payload = json.loads(mock_urlopen.call_args_list[0].args[0].data.decode('utf-8'))
+        campaign_payload = json.loads(mock_urlopen.call_args_list[1].args[0].data.decode('utf-8'))
+        self.assertEqual(single_payload['to'], [{'email': 'one@example.com'}])
+        self.assertEqual(campaign_payload['messageVersions'], [
+            {'to': [{'email': 'one@example.com'}]},
+            {'to': [{'email': 'two@example.com'}]},
+        ])
 
 
 class ConnectivityConfigTests(TestCase):
