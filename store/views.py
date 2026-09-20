@@ -910,7 +910,7 @@ def _get_web_push_subscriptions(*, user=None, app_user_only=False):
     except Exception as exc:
         msg = str(exc).lower()
         if 'web_push_subscriptions' in msg and ('does not exist' in msg or 'relation' in msg or 'undefinedtable' in msg):
-            logging.getLogger(__name__).warning('Web push subscriptions table is missing; skipping browser push notifications.')
+            logging.getLogger(__name__).info('Web push subscriptions table is missing; skipping browser push notifications.')
             return []
         raise
 
