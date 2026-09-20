@@ -893,6 +893,88 @@ def send_web_push(subscription_info, payload):
         return False
 
 
+def _get_web_push_subscriptions(*, user=None, app_user_only=False):
+    """Return browser web-push subscriptions or an empty list if the table is absent.
+
+    Some deployment states can be missing the `web_push_subscriptions` table while the
+    app is still running, so browser-push sends should silently skip instead of
+    raising a database exception.
+    """
+    try:
+        qs = WebPushSubscription.objects.all()
+        if app_user_only:
+            qs = qs.filter(user__isnull=False)
+        if user is not None:
+            qs = qs.filter(user=user) | qs.filter(user__isnull=True)
+        return list(qs)
+    except Exception as exc:
+        msg = str(exc).lower()
+        if 'web_push_subscriptions' in msg and ('does not exist' in msg or 'relation' in msg or 'undefinedtable' in msg):
+            logging.getLogger(__name__).warning('Web push subscriptions table is missing; skipping browser push notifications.')
+            return []
+        raise
+
+
+def _send_user_push_notifications(user_ids, title, message, notification_type='broadcast', data=None):
+    """Deliver a notification to the registered devices and browsers of users.
+
+    This is called after the order transaction commits. Browser subscriptions
+    must belong to the target user, so private order information is never sent
+    to an anonymous subscription.
+    """
+    recipient_ids = list({user_id for user_id in user_ids if user_id})
+    if not recipient_ids:
+        return {'expo_sent': 0, 'web_sent': 0}
+
+    users = list(User.objects.filter(pk__in=recipient_ids, is_active=True))
+    payload_data = {'type': notification_type, **(data or {})}
+    expo_sent = 0
+    tokens = list(PushToken.objects.filter(user__in=users).values_list('token', flat=True).distinct())
+    if tokens:
+        expo_url = 'https://exp.host/--/api/v2/push/send'
+        messages = [
+            {'to': token, 'sound': 'default', 'title': title, 'body': message, 'data': payload_data}
+            for token in tokens
+        ]
+        for start in range(0, len(messages), 100):
+            chunk = messages[start:start + 100]
+            try:
+                request = Request(
+                    expo_url,
+                    data=json.dumps(chunk).encode('utf-8'),
+                    headers={'Accept': 'application/json', 'Content-Type': 'application/json'},
+                )
+                response = urlopen(request, timeout=10)
+                response.read()
+                expo_sent += len(chunk)
+            except Exception:
+                logging.getLogger(__name__).exception('Failed to send device push notification chunk.')
+
+    web_sent = 0
+    try:
+        subscriptions = list(WebPushSubscription.objects.filter(user__in=users))
+    except Exception:
+        logging.getLogger(__name__).exception('Failed to load browser push subscriptions.')
+        subscriptions = []
+
+    for subscription in subscriptions:
+        subscription_info = {
+            'endpoint': subscription.endpoint,
+            'keys': {'p256dh': subscription.p256dh or '', 'auth': subscription.auth or ''},
+        }
+        payload = {
+            'title': title,
+            'message': message,
+            'notification_type': notification_type,
+            'source': 'server',
+            'data': payload_data,
+        }
+        if send_web_push(subscription_info, payload):
+            web_sent += 1
+
+    return {'expo_sent': expo_sent, 'web_sent': web_sent}
+
+
 class IsActiveUser(BasePermission):
     def has_permission(self, request, view):
         if not IsAuthenticated().has_permission(request, view):
@@ -2043,27 +2125,15 @@ class CustomerPushBroadcastAPIView(APIView):
         if notifications:
             Notification.objects.bulk_create(notifications)
 
-        tokens = list(PushToken.objects.filter(user__in=customer_users).values_list('token', flat=True).distinct())
-        sent = 0
-        if tokens:
-            expo_url = 'https://exp.host/--/api/v2/push/send'
-            messages = [{
-                'to': token,
-                'sound': 'default',
-                'title': title,
-                'body': message,
-                'data': {'type': notification_type},
-            } for token in tokens]
-            for i in range(0, len(messages), 100):
-                chunk = messages[i:i + 100]
-                try:
-                    req = Request(expo_url, data=json.dumps(chunk).encode('utf-8'), headers={'Accept': 'application/json', 'Content-Type': 'application/json'})
-                    resp = urlopen(req, timeout=10)
-                    resp.read()
-                    sent += len(chunk)
-                except Exception:
-                    logging.exception('Failed to send push notification chunk')
-        return Response({'message': 'Customer broadcast sent.', 'recipients': len(customer_users), 'tokens_sent': sent}, status=status.HTTP_200_OK)
+        push_result = _send_user_push_notifications(
+            [user.id for user in customer_users], title, message, notification_type=notification_type,
+        )
+        return Response({
+            'message': 'Customer broadcast sent.',
+            'recipients': len(customer_users),
+            'tokens_sent': push_result['expo_sent'],
+            'browser_push_sent': push_result['web_sent'],
+        }, status=status.HTTP_200_OK)
 
 
 class AdminOrderDetailAPIView(APIView):
@@ -2455,7 +2525,7 @@ class UserNotificationCampaignAPIView(APIView):
                     logging.exception('Failed to send app push notification to %s', request.user.email)
 
         if 'push' in channels:
-            web_subscriptions = list(WebPushSubscription.objects.all())
+            web_subscriptions = _get_web_push_subscriptions(user=request.user)
             if not web_subscriptions:
                 web_subscriptions = [type('DummyWebPushSubscription', (), {'user_id': request.user.id, 'endpoint': 'https://example.com/push', 'p256dh': 'demo-dh', 'auth': 'demo-auth'})()]
             for subscription in web_subscriptions:
@@ -2597,11 +2667,7 @@ class PushSendAPIView(APIView):
 
         app_user_only = bool(request.data.get('app_user_only') or request.data.get('is_app_user'))
 
-        subs_qs = __import__('store.models', fromlist=['WebPushSubscription']).models.WebPushSubscription.objects.all()
-        if app_user_only:
-            subs_qs = subs_qs.filter(user__isnull=False)
-
-        subs = list(subs_qs)
+        subs = _get_web_push_subscriptions(app_user_only=app_user_only)
         sent = 0
         for sub in subs:
             subscription_info = {
@@ -2683,13 +2749,8 @@ class BroadcastNotificationAPIView(APIView):
 
         # Also send Web Push (Push API) notifications to subscribed browsers
         try:
-            from .models import WebPushSubscription
-            subs_qs = WebPushSubscription.objects.all()
-            # If broadcast is intended for app users only, filter by associated user
-            if bool(request.data.get('app_user_only') or request.data.get('is_app_user')):
-                subs_qs = subs_qs.filter(user__isnull=False)
-
-            subs = list(subs_qs)
+            app_user_only = bool(request.data.get('app_user_only') or request.data.get('is_app_user'))
+            subs = _get_web_push_subscriptions(app_user_only=app_user_only)
             web_sent = 0
             for sub in subs:
                 subscription_info = {
@@ -3065,14 +3126,29 @@ class CreateOrderAPIView(APIView):
 
             ensure_receipt_for_order(order)
 
-            admin_users = User.objects.filter(role='Admin', is_active=True)
-            for admin_user in admin_users:
-                Notification.objects.create(
-                    user=admin_user,
-                    title='New order received',
-                    message=f'A new order {order.order_number} has been placed.',
+            staff_users = list(User.objects.filter(role__in=['Admin', 'Seller'], is_active=True).only('id'))
+            order_title = 'New order received'
+            order_message = f'A new order {order.order_number} has been placed.'
+            Notification.objects.bulk_create([
+                Notification(
+                    user=staff_user,
+                    title=order_title,
+                    message=order_message,
                     notification_type='order',
+                    channels=['in_app', 'push'],
                 )
+                for staff_user in staff_users
+            ])
+            recipient_ids = [staff_user.id for staff_user in staff_users]
+            transaction.on_commit(
+                lambda recipient_ids=recipient_ids, order_number=order.order_number: _send_user_push_notifications(
+                    recipient_ids,
+                    order_title,
+                    order_message,
+                    notification_type='order',
+                    data={'order_number': order_number, 'url': '/orders'},
+                )
+            )
 
         return Response({'message': 'Order created successfully.', 'order': OrderListAPIView()._serialize_order(order)}, status=status.HTTP_201_CREATED)
 

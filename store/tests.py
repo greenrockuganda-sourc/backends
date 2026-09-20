@@ -4,6 +4,7 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.core import mail
 from django.core.management import call_command
+from django.db import ProgrammingError
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework.test import APIClient
@@ -186,6 +187,27 @@ class PushSubscriptionAndBroadcastTests(TestCase):
                 self.assertIn('recipients', broadcast_resp.data)
                 # Ensure our mock was called for web-push path
                 self.assertTrue(mock_webpush.called)
+
+    def test_push_send_handles_missing_web_push_table_gracefully(self):
+        admin_user = User.objects.create_user(
+            email='admin-push-send@example.com',
+            password='StrongPass123!',
+            first_name='Admin',
+            last_name='Push',
+            phone_number='0705555001',
+            is_staff=True,
+            is_superuser=True,
+            role='Admin',
+        )
+        token = str(RefreshToken.for_user(admin_user).access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        with patch('store.views.WebPushSubscription.objects.all', side_effect=ProgrammingError('relation "web_push_subscriptions" does not exist')):
+            resp = self.client.post(reverse('push_send'), {'title': 'Status update', 'message': 'Hello'}, format='json')
+
+        self.assertEqual(resp.status_code, 200)
+        self.assertEqual(resp.data['recipients'], 0)
+
     def test_dashboard_registration_defaults_to_seller_role(self):
         response = self.client.post(
             reverse('register'),
@@ -810,6 +832,15 @@ class AuthAndProfileAPITests(TestCase):
         self.assertEqual(len(list_response.data), 0)
 
     def test_cart_and_order_flow(self):
+        seller = User.objects.create_user(
+            email='seller-order-alert@example.com',
+            password='StrongPass123!',
+            first_name='Seller',
+            last_name='Alert',
+            phone_number='0700000010',
+            role='Seller',
+            is_active=True,
+        )
         category = Category.objects.create(category_name='Hair Care')
         brand = Brand.objects.create(brand_name='Glow')
         product = Product.objects.create(
@@ -851,17 +882,24 @@ class AuthAndProfileAPITests(TestCase):
         merge_response = self.client.post(reverse('cart_merge'), {'session_id': 'guest-cart-1'})
         self.assertEqual(merge_response.status_code, 200)
 
-        order_response = self.client.post(reverse('create_order'), {
-            'delivery_address': 'Kampala',
-            'phone_number': '0700000001',
-            'payment_method': 'PAY_ON_DELIVERY',
-        }, format='json')
+        with patch('store.views._send_user_push_notifications', return_value={'expo_sent': 0, 'web_sent': 1}) as mock_push:
+            with self.captureOnCommitCallbacks(execute=True):
+                order_response = self.client.post(reverse('create_order'), {
+                    'delivery_address': 'Kampala',
+                    'phone_number': '0700000001',
+                    'payment_method': 'PAY_ON_DELIVERY',
+                }, format='json')
         self.assertEqual(order_response.status_code, 201)
         self.assertEqual(Order.objects.count(), 1)
 
         order = Order.objects.get(order_number=order_response.data['order']['order_number'])
         self.assertEqual(order.order_status, 'Pending')
         self.assertEqual(order.delivery.delivery_status, 'Preparing')
+        seller_notification = Notification.objects.filter(user=seller, notification_type='order').first()
+        self.assertIsNotNone(seller_notification)
+        self.assertEqual(seller_notification.channels, ['in_app', 'push'])
+        mock_push.assert_called_once()
+        self.assertIn(seller.id, mock_push.call_args.args[0])
 
     def test_order_creation_auto_generates_a_receipt(self):
         category = Category.objects.create(category_name='Hair Care')
