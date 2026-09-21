@@ -57,21 +57,25 @@
               <td style="background:#102f4d; padding:16px 22px 12px 22px;">
                 <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="border-collapse:collapse;">
                   <tr>
+                    {# Order Confirmed #}
                     <td valign="middle" width="33%" style="padding:0 8px 8px 0;">
-                      <div style="display:inline-block; width:28px; height:28px; border-radius:50%; background:#ffffff; color:#102f4d; font-size:18px; font-weight:700; text-align:center; line-height:28px; margin-right:9px;">✓</div>
-                      <span style="font-size:12px; color:#edf5ff; text-transform:uppercase; letter-spacing:0.5px;">Order Confirmed</span>
+                      <div style="display:inline-block; width:28px; height:28px; border-radius:50%; {% if order_status in 'Confirmed,Processing,Packed,Out for Delivery,Delivered' %}background:#ffffff; color:#102f4d;{% else %}background:rgba(255,255,255,0.16); color:#dfeaf8;{% endif %} font-size:18px; font-weight:700; text-align:center; line-height:28px; margin-right:9px;">{% if order_status in 'Confirmed,Processing,Packed,Out for Delivery,Delivered' %}✓{% else %}•{% endif %}</div>
+                      <span style="font-size:12px; {% if order_status in 'Confirmed,Processing,Packed,Out for Delivery,Delivered' %}color:#edf5ff;{% else %}color:#dfeaf8;{% endif %} text-transform:uppercase; letter-spacing:0.5px;">Order Confirmed</span>
                     </td>
+                    {# Processing #}
                     <td valign="middle" width="22%" style="padding:0 8px 8px 0;">
-                      <div style="display:inline-block; width:28px; height:28px; border-radius:50%; background:rgba(255,255,255,0.16); color:#dfeaf8; font-size:18px; font-weight:700; text-align:center; line-height:28px; margin-right:9px;">•</div>
-                      <span style="font-size:12px; color:#dfeaf8;">Processing</span>
+                      <div style="display:inline-block; width:28px; height:28px; border-radius:50%; {% if order_status in 'Processing,Packed,Out for Delivery,Delivered' %}background:#ffffff; color:#102f4d;{% else %}background:rgba(255,255,255,0.16); color:#dfeaf8;{% endif %} font-size:18px; font-weight:700; text-align:center; line-height:28px; margin-right:9px;">{% if order_status in 'Processing,Packed,Out for Delivery,Delivered' %}✓{% else %}•{% endif %}</div>
+                      <span style="font-size:12px; {% if order_status in 'Processing,Packed,Out for Delivery,Delivered' %}color:#edf5ff;{% else %}color:#dfeaf8;{% endif %}">Processing</span>
                     </td>
+                    {# Out for Delivery #}
                     <td valign="middle" width="23%" style="padding:0 8px 8px 0;">
-                      <div style="display:inline-block; width:28px; height:28px; border-radius:50%; background:rgba(255,255,255,0.16); color:#dfeaf8; font-size:18px; font-weight:700; text-align:center; line-height:28px; margin-right:9px;">•</div>
-                      <span style="font-size:12px; color:#dfeaf8;">Out for Delivery</span>
+                      <div style="display:inline-block; width:28px; height:28px; border-radius:50%; {% if order_status in 'Out for Delivery,Delivered' %}background:#ffffff; color:#102f4d;{% else %}background:rgba(255,255,255,0.16); color:#dfeaf8;{% endif %} font-size:18px; font-weight:700; text-align:center; line-height:28px; margin-right:9px;">{% if order_status in 'Out for Delivery,Delivered' %}✓{% else %}•{% endif %}</div>
+                      <span style="font-size:12px; {% if order_status in 'Out for Delivery,Delivered' %}color:#edf5ff;{% else %}color:#dfeaf8;{% endif %}">Out for Delivery</span>
                     </td>
+                    {# Delivered #}
                     <td valign="middle" width="22%" style="padding:0 0 8px 0;">
-                      <div style="display:inline-block; width:28px; height:28px; border-radius:50%; background:rgba(255,255,255,0.16); color:#dfeaf8; font-size:18px; font-weight:700; text-align:center; line-height:28px; margin-right:9px;">•</div>
-                      <span style="font-size:12px; color:#dfeaf8;">Delivered</span>
+                      <div style="display:inline-block; width:28px; height:28px; border-radius:50%; {% if order_status == 'Delivered' %}background:#ffffff; color:#102f4d;{% else %}background:rgba(255,255,255,0.16); color:#dfeaf8;{% endif %} font-size:18px; font-weight:700; text-align:center; line-height:28px; margin-right:9px;">{% if order_status == 'Delivered' %}✓{% else %}•{% endif %}</div>
+                      <span style="font-size:12px; {% if order_status == 'Delivered' %}color:#edf5ff;{% else %}color:#dfeaf8;{% endif %}">Delivered</span>
                     </td>
                   </tr>
                 </table>
@@ -108,7 +112,22 @@
                         </tr>
                         {% for item in order_items %}
                           <tr>
-                            <td style="padding:12px 10px; border-bottom:1px solid #edf2f7; font-size:13px; color:#0d1f32;">{{ item.name }}</td>
+                            <td style="padding:12px 10px; border-bottom:1px solid #edf2f7; font-size:13px; color:#0d1f32;">
+                              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+                                <tr>
+                                  <td style="width:60px; padding-right:8px; vertical-align:middle;">
+                                    {% if item.image_cid %}
+                                      <img src="cid:{{ item.image_cid }}" alt="{{ item.name }}" width="56" style="display:block; border-radius:8px; max-width:56px; height:auto;" />
+                                    {% elif item.image_url %}
+                                      <img src="{{ item.image_url }}" alt="{{ item.name }}" width="56" style="display:block; border-radius:8px; max-width:56px; height:auto;" />
+                                    {% endif %}
+                                  </td>
+                                  <td style="vertical-align:middle;">
+                                    {{ item.name }}
+                                  </td>
+                                </tr>
+                              </table>
+                            </td>
                             <td align="center" style="padding:12px 10px; border-bottom:1px solid #edf2f7; font-size:13px; color:#0d1f32;">{{ item.quantity }}</td>
                             <td align="right" style="padding:12px 10px; border-bottom:1px solid #edf2f7; font-size:13px; color:#0d1f32;">UGX {{ item.unit_price|floatformat:0 }}</td>
                             <td align="right" style="padding:12px 10px; border-bottom:1px solid #edf2f7; font-size:13px; color:#0d1f32;">UGX {{ item.subtotal|floatformat:0 }}</td>

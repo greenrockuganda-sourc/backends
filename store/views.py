@@ -753,11 +753,18 @@ def _send_order_status_email(order, subject, message):
         unit_price = Decimal(str(getattr(item, 'unit_price', '0') or '0'))
         subtotal = Decimal(str(getattr(item, 'subtotal', '0') or '0'))
         subtotal_amount += subtotal
+        # pick product image if available (supports multiple image fields)
+        product = getattr(item, 'product', None)
+        image_url = None
+        if product is not None:
+            image_url = getattr(product, 'image_url', None) or getattr(product, 'image_url_2', None) or getattr(product, 'image_url_3', None) or getattr(product, 'image_url_4', None)
+
         order_items.append({
             'name': getattr(item, 'product_name', None) or getattr(getattr(item, 'product', None), 'product_name', 'Item'),
             'quantity': quantity,
             'unit_price': float(unit_price),
             'subtotal': float(subtotal),
+            'image_url': image_url,
         })
 
     estimated_delivery = (timezone.now().date() + timedelta(days=3)).strftime('%d %b %Y')
@@ -777,10 +784,42 @@ def _send_order_status_email(order, subject, message):
             'subtotal': float(subtotal_amount),
             'shipping_fee': float(getattr(order, 'delivery_fee', 0) or 0),
             'total_amount': float(getattr(order, 'total_amount', 0) or 0),
-            'support_phone': '+256 702 123 456',
-            'support_email': 'support@glowsaloonsupplies.lovie.me',
+            'support_phone': '0746998111 / 0771616736',
+            'support_email': 'glowsalonsupplies24@gmail.com',
         }
-        html_content = render_to_string('email/order_confirmation_email.html', context)
+        # attempt to fetch inline images and add Content-ID mappings
+        try:
+            cid_map, inline_attachments = _fetch_inline_images_for_email(order_items)
+            # expose cid reference per item for template use (img src="cid:...")
+            for it in order_items:
+                img = it.get('image_url')
+                if img and img in cid_map:
+                    it['image_cid'] = cid_map[img]
+                else:
+                    it['image_cid'] = None
+
+            # prepare attachments parameter depending on transport
+            attachments_param = []
+            if getattr(settings, 'BREVO_API_KEY', ''):
+                # Brevo API expects tuples (filename, content, mime_type)
+                for idx, (mime_image, cid) in enumerate(inline_attachments):
+                    try:
+                        data = mime_image.get_payload(decode=True)
+                    except Exception:
+                        data = None
+                    filename = getattr(mime_image, 'get_filename', lambda: None)() or f'product-{idx+1}.jpg'
+                    mime_type = mime_image.get_content_type() if hasattr(mime_image, 'get_content_type') else 'image/jpeg'
+                    if data:
+                        attachments_param.append((filename, data, mime_type))
+            else:
+                # SMTP path: pass MIMEImage objects so Django attaches them inline
+                for mime_image, cid in inline_attachments:
+                    attachments_param.append(mime_image)
+
+            html_content = render_to_string('email/order_confirmation_email.html', context)
+        except Exception:
+            # if image fetching fails, fall back to rendering without inline attachments
+            html_content = render_to_string('email/order_confirmation_email.html', context)
     except Exception:
         html_content = f"""
         <html>
@@ -794,7 +833,7 @@ def _send_order_status_email(order, subject, message):
         </html>
         """
 
-    return _send_email_message(to_email, subject, html_content, reply_to=[getattr(settings, 'DEFAULT_FROM_EMAIL', '')])
+    return _send_email_message(to_email, subject, html_content, attachments=attachments_param if 'attachments_param' in locals() else None, reply_to=[getattr(settings, 'DEFAULT_FROM_EMAIL', '')])
 
 
 def _send_order_status_sms(order, message):
