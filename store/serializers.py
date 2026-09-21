@@ -37,17 +37,17 @@ class RegisterSerializer(serializers.ModelSerializer):
             attrs['role'] = 'Customer'
         role = attrs['role']
 
-        if not email and not phone_number:
-            raise serializers.ValidationError('Enter an email address, a phone number, or both.')
-        if email and User.objects.filter(email__iexact=email).exists():
+        if not email:
+            raise serializers.ValidationError({'email': 'Email is required.'})
+        if not phone_number:
+            raise serializers.ValidationError({'phone_number': 'Phone number is required.'})
+        if User.objects.filter(email__iexact=email).exists():
             raise serializers.ValidationError({'email': 'An account with this email address already exists.'})
-        if phone_number and User.objects.filter(phone_number=phone_number).exists():
+        if User.objects.filter(phone_number=phone_number).exists():
             raise serializers.ValidationError({'phone_number': 'An account with this phone number already exists.'})
         if role == 'Customer':
             if not str(attrs.get('salon_name') or '').strip():
                 raise serializers.ValidationError({'salon_name': 'Salon name is required.'})
-            if not str(attrs.get('location') or '').strip():
-                raise serializers.ValidationError({'location': 'Salon location is required.'})
 
         attrs['email'] = email or None
         attrs['phone_number'] = phone_number or None

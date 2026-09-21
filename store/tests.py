@@ -122,6 +122,24 @@ class RegistrationRoleTests(TestCase):
         self.assertEqual(response.data['user']['role'], 'Customer')
         self.assertTrue(Customer.objects.filter(user__email='customer-app@example.com').exists())
 
+    def test_customer_registration_allows_missing_location(self):
+        response = self.client.post(
+            reverse('register'),
+            {
+                'first_name': 'Noel',
+                'last_name': 'Customer',
+                'email': 'customer-nolocation@example.com',
+                'phone_number': '+256700000003',
+                'password': 'StrongPass123!',
+                'salon_name': 'Glow No Location Studio',
+            },
+            format='json',
+            HTTP_X_CLIENT_TYPE='customer',
+        )
+
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.data['user']['role'], 'Customer')
+        self.assertTrue(Customer.objects.filter(user__email='customer-nolocation@example.com').exists())
 
 
 class PushSubscriptionAndBroadcastTests(TestCase):
