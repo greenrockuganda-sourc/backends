@@ -5,6 +5,7 @@ from django.contrib.auth import get_user_model
 from django.core import mail
 from django.core.management import call_command
 from django.db import ProgrammingError
+from django.template.loader import render_to_string
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from rest_framework.test import APIClient
@@ -1310,6 +1311,36 @@ class AdminReceiptPDFAndEmailTests(TestCase):
         self.assertEqual(len(mail.outbox), 1)
         self.assertEqual(mail.outbox[0].to, ['joshuajessey3@gmail.com'])
         self.assertIn('Track your order', mail.outbox[0].body)
+
+    def test_order_status_email_intro_changes_by_status(self):
+        status_messages = {
+            'Confirmed': 'We’ve received your order and it’s been confirmed and is being prepared for dispatch.',
+            'Processing': 'Your order is now being processed and prepared for dispatch.',
+            'Out for Delivery': 'Your order is out for delivery and on its way to you.',
+            'Delivered': 'Your order has been delivered successfully. Thank you for shopping with Glow.',
+        }
+
+        for status, expected_text in status_messages.items():
+            rendered = render_to_string('email/order_confirmation_email.html', {
+                'customer_name': 'Joshua Jessey',
+                'message': expected_text,
+                'order_number': 'ORD-20260920190027-1',
+                'tracking_url': 'https://example.com/track/ORD-20260920190027-1',
+                'company_name': 'Glow',
+                'order_status': status,
+                'order_date': '2026-09-20 19:00:27',
+                'estimated_delivery_date': '20 Sep 2026, 07:00 PM',
+                'shipping_address': 'Kampala, Uganda',
+                'order_items': [],
+                'subtotal': 0,
+                'shipping_fee': 0,
+                'total_amount': 0,
+                'support_phone': '0746998111 / 0772616736',
+                'support_email': 'glowsalonsupplies24@gmail.com',
+            })
+            self.assertIn(expected_text, rendered)
+            self.assertIn(status, rendered)
+            self.assertIn('20 Sep 2026, 07:00 PM', rendered)
 
 class HomeCatalogSeedTests(TestCase):
     def test_seed_home_catalog_creates_products_for_each_category(self):

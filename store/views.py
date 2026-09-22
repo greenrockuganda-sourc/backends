@@ -122,9 +122,9 @@ def build_receipt_context(receipt):
         'customer_name': customer.get_full_name() or customer.email,
         'items': items,
         'company_name': 'Glow',
-        'company_address': '123 Salon Lane, Kampala',
-        'company_email': 'support@glow.com',
-        'company_phone': '+256 700 000 000',
+        'company_address': '',
+        'company_email': 'glowsalonsupplies24@gmail.com',
+        'company_phone': '0746998111 / 0772616736',
     }
 
 
@@ -545,9 +545,12 @@ def _build_order_status_message(order, status):
     if status == 'Confirmed':
         subject = 'Glow | Order confirmed'
         message = f'Glow: your order {order.order_number} has been confirmed and is being prepared for dispatch.{tracking_text}'
+    elif status == 'Processing':
+        subject = 'Glow | Order processing'
+        message = f'Glow: your order {order.order_number} is now being processed and prepared for dispatch.{tracking_text}'
     elif status == 'Out for Delivery':
         subject = 'Glow | Out for delivery'
-        message = f'Glow: your order {order.order_number} is on its way.{tracking_text}'
+        message = f'Glow: your order {order.order_number} is out for delivery and on its way to you.{tracking_text}'
     elif status == 'Delivered':
         subject = 'Glow | Order delivered'
         message = f'Glow: your order {order.order_number} has been delivered successfully. Thank you for shopping with Glow.{tracking_text}'
@@ -767,8 +770,9 @@ def _send_order_status_email(order, subject, message):
             'image_url': image_url,
         })
 
-    estimated_delivery = (timezone.now().date() + timedelta(days=3)).strftime('%d %b %Y')
-    shipping_address = order.delivery_address or getattr(order.customer, 'address', '') or 'Kampala, Uganda'
+    delivery_timestamp = order.order_date or timezone.now()
+    estimated_delivery = delivery_timestamp.strftime('%d %b %Y, %I:%M %p')
+    shipping_address = order.delivery_address or getattr(order.customer, 'address', '') or ''
     try:
         context = {
             'customer_name': customer_user.get_full_name() or customer_user.email,
@@ -784,7 +788,7 @@ def _send_order_status_email(order, subject, message):
             'subtotal': float(subtotal_amount),
             'shipping_fee': float(getattr(order, 'delivery_fee', 0) or 0),
             'total_amount': float(getattr(order, 'total_amount', 0) or 0),
-            'support_phone': '0746998111 / 0771616736',
+            'support_phone': '0746998111 / 0772616736',
             'support_email': 'glowsalonsupplies24@gmail.com',
         }
         # attempt to fetch inline images and add Content-ID mappings

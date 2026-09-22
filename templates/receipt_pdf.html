@@ -134,9 +134,6 @@
         <div class="receipt-summary">
           <p class="summary-item"><strong>Billing</strong>{{ customer.get_full_name|default:customer.email }}</p>
           <p class="summary-item"><strong>Email</strong>{{ customer.email }}</p>
-          {% if order.delivery_address %}
-          <p class="summary-item"><strong>Address</strong>{{ order.delivery_address }}</p>
-          {% endif %}
         </div>
         <div class="customer-summary">
           <p class="summary-item"><strong>Payment</strong>{{ order.payment_method|default:'Pay on Delivery' }}</p>
@@ -187,7 +184,7 @@
       </table>
 
       <div class="footer">
-        <p>{{ company_name }} · {{ company_address }}</p>
+        <p>{{ company_name }}</p>
         <p>Contact: {{ company_email }} · {{ company_phone }}</p>
       </div>
     </div>

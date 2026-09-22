@@ -31,7 +31,17 @@
                     <td valign="middle" width="58%" style="padding-right:12px;">
                       <div style="font-size:29px; line-height:1.2; color:#0d1f32; font-weight:700; margin:0 0 10px; font-family:Arial, Helvetica, sans-serif;">Hello {{ customer_name }},</div>
                       <div style="font-size:32px; line-height:1.1; color:#0d1f32; font-weight:700; margin:0 0 12px; font-family:Arial, Helvetica, sans-serif;">Thank you for your order!</div>
-                      <div style="font-size:15px; line-height:1.6; color:#3c4d5f; margin:0 0 18px;">We’ve received your order and it’s now being processed.<br>Here are your order details below.</div>
+                      {% if order_status == 'Confirmed' %}
+                        <div style="font-size:15px; line-height:1.6; color:#3c4d5f; margin:0 0 18px;">We’ve received your order and it’s been confirmed and is being prepared for dispatch.<br>Here are your order details below.</div>
+                      {% elif order_status == 'Processing' %}
+                        <div style="font-size:15px; line-height:1.6; color:#3c4d5f; margin:0 0 18px;">Your order is now being processed and prepared for dispatch.<br>Here are your order details below.</div>
+                      {% elif order_status == 'Out for Delivery' %}
+                        <div style="font-size:15px; line-height:1.6; color:#3c4d5f; margin:0 0 18px;">Your order is out for delivery and on its way to you.<br>Here are your order details below.</div>
+                      {% elif order_status == 'Delivered' %}
+                        <div style="font-size:15px; line-height:1.6; color:#3c4d5f; margin:0 0 18px;">Your order has been delivered successfully. Thank you for shopping with Glow.<br>Here are your order details below.</div>
+                      {% else %}
+                        <div style="font-size:15px; line-height:1.6; color:#3c4d5f; margin:0 0 18px;">We’ve received your order and it’s now being processed.<br>Here are your order details below.</div>
+                      {% endif %}
 
                       <div style="font-size:14px; line-height:1.7; color:#0d1f32; margin:0 0 5px;">
                         <span style="font-weight:700;">Order Number:</span> <span style="font-weight:700; color:#102f4d;">#{{ order_number }}</span>
@@ -41,7 +51,7 @@
                       </div>
 
                       {% if tracking_url %}
-                        <a href="{{ tracking_url }}" style="display:inline-block; background:#f39a2d; color:#ffffff; text-decoration:none; font-size:14px; font-weight:700; padding:14px 24px; border-radius:10px;">View Order Details →</a>
+                        <a href="{{ tracking_url }}" style="display:block; width:100%; max-width:220px; background:#f39a2d; color:#ffffff; text-decoration:none; font-size:14px; font-weight:700; padding:14px 24px; border-radius:10px; text-align:center; box-sizing:border-box; white-space:nowrap;">View Order Details →</a>
                       {% endif %}
                     </td>
 
@@ -153,18 +163,20 @@
                     </td>
 
                     <td valign="top" width="38%" style="padding-left:12px;">
+                      {% if shipping_address %}
                       <div style="background:#ffffff; border:1px solid #dfe7ef; border-radius:10px; padding:16px 14px; margin-bottom:16px;">
                         <div style="font-size:12px; line-height:1.2; font-weight:700; letter-spacing:0.5px; color:#537094; text-transform:uppercase; margin-bottom:8px;">Shipping Address</div>
                         <div style="font-size:14px; line-height:1.7; color:#0d1f32; font-weight:700;">{{ customer_name }}</div>
                         <div style="font-size:14px; line-height:1.7; color:#4a5a6b;">{{ shipping_address }}</div>
                       </div>
+                      {% endif %}
 
                       <div style="background:linear-gradient(180deg, #0d2442 0%, #123d67 100%); border-radius:12px; padding:18px 14px; color:#ffffff; margin-bottom:16px;">
                         <div style="font-size:28px; line-height:1; margin-bottom:8px;">📦</div>
                         <div style="font-size:22px; line-height:1.2; font-weight:700; margin-bottom:6px;">Track your order</div>
                         <div style="font-size:13px; line-height:1.5; color:#dfeaf8; margin-bottom:14px;">Get real-time updates on your delivery status.</div>
                         {% if tracking_url %}
-                          <a href="{{ tracking_url }}" style="display:inline-block; background:#f39a2d; color:#ffffff; text-decoration:none; padding:10px 18px; border-radius:8px; font-size:13px; font-weight:700;">Track Order →</a>
+                          <a href="{{ tracking_url }}" style="display:block; width:100%; max-width:200px; background:#f39a2d; color:#ffffff; text-decoration:none; padding:10px 18px; border-radius:8px; font-size:13px; font-weight:700; text-align:center; box-sizing:border-box; white-space:nowrap;">Track Order →</a>
                         {% endif %}
                       </div>
 
