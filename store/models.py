@@ -76,6 +76,26 @@ class Customer(models.Model):
         return self.user.get_full_name() or self.user.email
 
 
+class CustomerAddress(models.Model):
+    customer = models.ForeignKey(Customer, on_delete=models.CASCADE, related_name='addresses')
+    label = models.CharField(max_length=80, blank=True, default='Home')
+    address = models.TextField(blank=True, null=True)
+    district = models.CharField(max_length=255, blank=True, null=True)
+    division = models.CharField(max_length=255, blank=True, null=True)
+    parish = models.CharField(max_length=255, blank=True, null=True)
+    village = models.CharField(max_length=255, blank=True, null=True)
+    phone = models.CharField(max_length=20, blank=True, null=True)
+    is_default = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'customer_addresses'
+
+    def __str__(self):
+        return f"{self.customer.user.get_full_name() or self.customer.user.email} - {self.label or 'Address'}"
+
+
 class Category(models.Model):
     category_name = models.CharField(max_length=255, unique=True)
     description = models.TextField(blank=True, null=True)

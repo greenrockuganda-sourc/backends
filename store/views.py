@@ -49,7 +49,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from .models import Brand, CartItem, Category, Customer, Delivery, Notification, PushToken, Order, OrderItem, OrderStatusHistory, Payment, Product, Recipe, Receipt, Review, ShoppingCart, WebPushSubscription
+from .models import Brand, CartItem, Category, Customer, CustomerAddress, Delivery, Notification, PushToken, Order, OrderItem, OrderStatusHistory, Payment, Product, Recipe, Receipt, Review, ShoppingCart, WebPushSubscription
 from .serializers import (
     BrandSerializer,
     BrandWriteSerializer,
@@ -58,6 +58,8 @@ from .serializers import (
     CartUpdateSerializer,
     CategorySerializer,
     CategoryWriteSerializer,
+    CustomerAddressSerializer,
+    CustomerAddressWriteSerializer,
     CustomerWriteSerializer,
     DeliveryUpdateSerializer,
     ForgotPasswordSerializer,
@@ -1368,12 +1370,149 @@ class PublicProductCatalogAPIView(APIView):
         }, status=status.HTTP_200_OK)
 
 
+def _serialize_customer_address(address):
+    return {
+        'id': address.id,
+        'label': address.label or 'Home',
+        'address': address.address or '',
+        'district': address.district or '',
+        'division': address.division or '',
+        'parish': address.parish or '',
+        'village': address.village or '',
+        'phone': address.phone or '',
+        'is_default': bool(address.is_default),
+        'created_at': address.created_at.isoformat() if getattr(address, 'created_at', None) else None,
+        'updated_at': address.updated_at.isoformat() if getattr(address, 'updated_at', None) else None,
+    }
+
+
+class CustomerAddressListCreateAPIView(APIView):
+    permission_classes = [IsActiveUser]
+
+    def get(self, request):
+        customer = getattr(request.user, 'customer', None)
+        if not customer:
+            return Response([], status=status.HTTP_200_OK)
+        addresses = customer.addresses.order_by('-is_default', '-created_at').all()
+        return Response([_serialize_customer_address(address) for address in addresses], status=status.HTTP_200_OK)
+
+    def post(self, request):
+        customer = getattr(request.user, 'customer', None)
+        if not customer:
+            customer = Customer.objects.create(user=request.user, salon_name='', owner_name=request.user.get_full_name())
+
+        if customer.addresses.count() >= 5:
+            return Response({'detail': 'You can save up to 5 delivery locations.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = CustomerAddressWriteSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        validated = serializer.validated_data
+        address_text = (validated.get('address') or '').strip()
+        if not address_text and not any(validated.get(field) for field in ['district', 'division', 'parish', 'village']):
+            return Response({'detail': 'Address text or full location is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        defaults_to_clear = customer.addresses.filter(is_default=True).exclude(pk=request.data.get('id'))
+        is_default = bool(validated.get('is_default', False))
+        if not customer.addresses.exists() or (not is_default and not customer.addresses.filter(is_default=True).exists()):
+            is_default = True
+
+        saved_address = customer.addresses.create(
+            label=validated.get('label') or 'Home',
+            address=address_text,
+            district=(validated.get('district') or '').strip(),
+            division=(validated.get('division') or '').strip(),
+            parish=(validated.get('parish') or '').strip(),
+            village=(validated.get('village') or '').strip(),
+            phone=(validated.get('phone') or '').strip(),
+            is_default=is_default,
+        )
+
+        if is_default:
+            defaults_to_clear.update(is_default=False)
+
+        return Response(_serialize_customer_address(saved_address), status=status.HTTP_201_CREATED)
+
+
+class CustomerAddressDetailAPIView(APIView):
+    permission_classes = [IsActiveUser]
+
+    def get(self, request, address_id):
+        customer = getattr(request.user, 'customer', None)
+        if not customer:
+            return Response({'detail': 'Customer profile not found.'}, status=status.HTTP_404_NOT_FOUND)
+        address = customer.addresses.filter(pk=address_id).first()
+        if not address:
+            return Response({'detail': 'Address not found.'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(_serialize_customer_address(address), status=status.HTTP_200_OK)
+
+    def patch(self, request, address_id):
+        customer = getattr(request.user, 'customer', None)
+        if not customer:
+            return Response({'detail': 'Customer profile not found.'}, status=status.HTTP_404_NOT_FOUND)
+        address = customer.addresses.filter(pk=address_id).first()
+        if not address:
+            return Response({'detail': 'Address not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        serializer = CustomerAddressWriteSerializer(address, data=request.data, partial=True)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        validated = serializer.validated_data
+        if 'label' in validated:
+            address.label = validated['label'] or 'Home'
+        if 'address' in validated:
+            address.address = (validated['address'] or '').strip()
+        if 'district' in validated:
+            address.district = (validated['district'] or '').strip()
+        if 'division' in validated:
+            address.division = (validated['division'] or '').strip()
+        if 'parish' in validated:
+            address.parish = (validated['parish'] or '').strip()
+        if 'village' in validated:
+            address.village = (validated['village'] or '').strip()
+        if 'phone' in validated:
+            address.phone = (validated['phone'] or '').strip()
+        if 'is_default' in validated:
+            is_default = bool(validated['is_default'])
+            if is_default:
+                customer.addresses.exclude(pk=address.pk).update(is_default=False)
+            address.is_default = is_default
+
+        if not address.address and not any([address.district, address.division, address.parish, address.village]):
+            return Response({'detail': 'Address text or location is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        address.save()
+        return Response(_serialize_customer_address(address), status=status.HTTP_200_OK)
+
+    def delete(self, request, address_id):
+        customer = getattr(request.user, 'customer', None)
+        if not customer:
+            return Response({'detail': 'Customer profile not found.'}, status=status.HTTP_404_NOT_FOUND)
+        address = customer.addresses.filter(pk=address_id).first()
+        if not address:
+            return Response({'detail': 'Address not found.'}, status=status.HTTP_404_NOT_FOUND)
+        address.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
 class HomeProfileAPIView(APIView):
     permission_classes = [AllowAny]
 
     def get(self, request):
         if request.user.is_authenticated and getattr(request.user, 'is_active', False):
-            return Response(UserSerializer(request.user).data, status=status.HTTP_200_OK)
+            payload = UserSerializer(request.user).data
+            customer = getattr(request.user, 'customer', None)
+            payload['addresses'] = [
+                _serialize_customer_address(addr) for addr in (customer.addresses.order_by('-is_default', '-created_at').all() if customer else [])
+            ]
+            payload['address'] = customer.address if customer else ''
+            payload['district'] = customer.district if customer else ''
+            payload['division'] = getattr(customer, 'division', '') if customer else ''
+            payload['parish'] = getattr(customer, 'parish', '') if customer else ''
+            payload['village'] = customer.city if customer else ''
+            return Response(payload, status=status.HTTP_200_OK)
         return Response({
             'first_name': 'Guest',
             'last_name': '',
@@ -1381,6 +1520,12 @@ class HomeProfileAPIView(APIView):
             'phone_number': '',
             'role': 'Customer',
             'profile_image': '',
+            'addresses': [],
+            'address': '',
+            'district': '',
+            'division': '',
+            'parish': '',
+            'village': '',
         }, status=status.HTTP_200_OK)
 
 
@@ -1389,7 +1534,26 @@ class ProfileAPIView(APIView):
 
     def get(self, request):
         serializer = UserSerializer(request.user)
-        return Response(serializer.data, status=status.HTTP_200_OK)
+        payload = serializer.data
+        customer = getattr(request.user, 'customer', None)
+        if customer:
+            payload['address'] = customer.address or ''
+            payload['district'] = customer.district or ''
+            payload['division'] = getattr(customer, 'division', '') or ''
+            payload['parish'] = getattr(customer, 'parish', '') or ''
+            payload['village'] = customer.city or ''
+            payload['addresses'] = [
+                _serialize_customer_address(addr)
+                for addr in customer.addresses.order_by('-is_default', '-created_at').all()
+            ]
+        else:
+            payload['address'] = ''
+            payload['district'] = ''
+            payload['division'] = ''
+            payload['parish'] = ''
+            payload['village'] = ''
+            payload['addresses'] = []
+        return Response(payload, status=status.HTTP_200_OK)
 
     def put(self, request):
         serializer = ProfileSerializer(request.user, data=request.data, partial=True)
@@ -3105,6 +3269,28 @@ class CreateOrderAPIView(APIView):
         if not cart or not cart.items.exists():
             return Response({'detail': 'Cart is empty.'}, status=status.HTTP_400_BAD_REQUEST)
 
+        selected_address = None
+        address_id = serializer.validated_data.get('address_id')
+        if address_id is not None:
+            selected_address = customer.addresses.filter(pk=address_id).first()
+            if not selected_address:
+                return Response({'detail': 'Selected delivery address not found.'}, status=status.HTTP_404_NOT_FOUND)
+
+        delivery_address = (serializer.validated_data.get('delivery_address') or '').strip()
+        if selected_address is not None:
+            delivery_address = (
+                selected_address.address
+                or ' '.join(part for part in [selected_address.district, selected_address.division, selected_address.parish, selected_address.village] if part and part.strip())
+                or delivery_address
+            ).strip()
+
+        if not delivery_address:
+            return Response({'detail': 'A delivery location is required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        phone_number = (serializer.validated_data.get('phone_number') or selected_address.phone or request.user.phone_number or '').strip()
+        if not phone_number:
+            return Response({'detail': 'A phone number is required for delivery.'}, status=status.HTTP_400_BAD_REQUEST)
+
         with transaction.atomic():
             for item in cart.items.all():
                 if item.quantity > item.product.quantity_in_stock:
@@ -3120,8 +3306,8 @@ class CreateOrderAPIView(APIView):
                 payment_method=serializer.validated_data.get('payment_method', 'PAY_ON_DELIVERY'),
                 payment_status='Pending',
                 order_status='Pending',
-                delivery_address=serializer.validated_data.get('delivery_address', ''),
-                phone_number=serializer.validated_data.get('phone_number', request.user.phone_number or ''),
+                delivery_address=delivery_address,
+                phone_number=phone_number,
                 notes=serializer.validated_data.get('notes', ''),
             )
 

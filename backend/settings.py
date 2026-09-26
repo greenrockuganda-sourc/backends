@@ -148,6 +148,29 @@ DATABASES = {
     }
 }
 
+REDIS_URL = os.getenv('REDIS_URL', '').strip()
+if REDIS_URL:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django_redis.cache.RedisCache',
+            'LOCATION': REDIS_URL,
+            'OPTIONS': {
+                'CLIENT_CLASS': 'django_redis.client.DefaultClient',
+                'IGNORE_EXCEPTIONS': True,
+            },
+            'KEY_PREFIX': 'glow_',
+        }
+    }
+else:
+    CACHES = {
+        'default': {
+            'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+            'LOCATION': 'glow-local-cache',
+        }
+    }
+
+SESSION_ENGINE = 'django.contrib.sessions.backends.cached_db'
+CACHE_MIDDLEWARE_SECONDS = int(os.getenv('CACHE_MIDDLEWARE_SECONDS', '60'))
 
 # Application definition
 INSTALLED_APPS = [
@@ -278,8 +301,11 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(minutes=60),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    # Keep customer sessions stable for long-running mobile app usage. A three-
+    # month gap should not require a fresh sign-in, so the refresh token must
+    # outlive the app's inactive periods.
+    'ACCESS_TOKEN_LIFETIME': timedelta(days=30),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=180),
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 

@@ -15,4 +15,5 @@ case "$PORT" in
     ;;
 esac
 
-exec gunicorn backend.wsgi --bind "0.0.0.0:${PORT}" --log-file -
+export PORT
+exec gunicorn --config gunicorn.conf.py backend.wsgi

@@ -1,7 +1,7 @@
 from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
-from .models import Brand, Category, Customer, Delivery, Notification, Order, Payment, Product, Receipt, Recipe, Review
+from .models import Brand, Category, Customer, CustomerAddress, Delivery, Notification, Order, Payment, Product, Receipt, Recipe, Review
 from .models import PushToken
 from .models import WebPushSubscription
 
@@ -211,6 +211,19 @@ class CustomerWriteSerializer(serializers.Serializer):
     is_active = serializers.BooleanField(required=False)
 
 
+class CustomerAddressSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CustomerAddress
+        fields = ['id', 'label', 'address', 'district', 'division', 'parish', 'village', 'phone', 'is_default', 'created_at', 'updated_at']
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class CustomerAddressWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CustomerAddress
+        fields = ['label', 'address', 'district', 'division', 'parish', 'village', 'phone', 'is_default']
+
+
 class CartAddSerializer(serializers.Serializer):
     product_id = serializers.IntegerField()
     quantity = serializers.IntegerField(min_value=1, default=1)
@@ -227,6 +240,7 @@ class CartMergeSerializer(serializers.Serializer):
 
 class OrderCreateSerializer(serializers.Serializer):
     delivery_address = serializers.CharField(required=False, allow_blank=True)
+    address_id = serializers.IntegerField(required=False, allow_null=True)
     phone_number = serializers.CharField(required=False, allow_blank=True)
     payment_method = serializers.ChoiceField(
         choices=[

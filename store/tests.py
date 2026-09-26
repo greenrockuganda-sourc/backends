@@ -1,6 +1,8 @@
 import json
+from datetime import timedelta
 from unittest.mock import patch
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core import mail
 from django.core.management import call_command
@@ -12,7 +14,7 @@ from rest_framework.test import APIClient
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from backend import settings as backend_settings
-from .models import Brand, Category, Customer, Delivery, Notification, Order, OrderItem, Product, Receipt, Recipe
+from .models import Brand, Category, Customer, CustomerAddress, Delivery, Notification, Order, OrderItem, Product, Receipt, Recipe
 from .views import generate_product_sku
 import os
 
@@ -102,6 +104,10 @@ class ConnectivityConfigTests(TestCase):
 class RegistrationRoleTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+
+    def test_refresh_token_lifecycle_keeps_mobile_sessions_active_for_three_months(self):
+        self.assertGreater(settings.SIMPLE_JWT['REFRESH_TOKEN_LIFETIME'], timedelta(days=90))
+        self.assertGreater(settings.SIMPLE_JWT['ACCESS_TOKEN_LIFETIME'], timedelta(days=1))
 
     def test_customer_app_registration_defaults_to_customer_role(self):
         response = self.client.post(
@@ -850,6 +856,103 @@ class AuthAndProfileAPITests(TestCase):
         self.assertEqual(list_response.status_code, 200)
         self.assertEqual(len(list_response.data), 0)
 
+    def test_customer_address_delete_removes_backend_record(self):
+        user = User.objects.create_user(
+            email='address-delete@example.com',
+            password='StrongPass123!',
+            first_name='Address',
+            last_name='Delete',
+            phone_number='0700111333',
+            is_active=True,
+        )
+        customer = Customer.objects.create(user=user, salon_name='Address Salon', address='Old location')
+        address = CustomerAddress.objects.create(
+            customer=customer,
+            label='Home',
+            address='Plot 1, Kira Road',
+            district='Kampala',
+            division='Makindye',
+            parish='Kabalagala',
+            village='Kibuli',
+            phone='0700111333',
+            is_default=True,
+        )
+
+        token = str(RefreshToken.for_user(user).access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        delete_response = self.client.delete(reverse('customer_address_detail', kwargs={'address_id': address.id}))
+
+        self.assertEqual(delete_response.status_code, 204)
+        self.assertFalse(CustomerAddress.objects.filter(pk=address.id).exists())
+
+    def test_customer_can_store_up_to_five_addresses_and_choose_one_for_order(self):
+        user = User.objects.create_user(
+            email='five-address@example.com',
+            password='StrongPass123!',
+            first_name='Five',
+            last_name='Address',
+            phone_number='0700222333',
+            is_active=True,
+        )
+        customer = Customer.objects.create(user=user, salon_name='Five Address Salon', address='Kampala')
+        for index in range(5):
+            CustomerAddress.objects.create(
+                customer=customer,
+                label=f'Address {index + 1}',
+                address=f'Location {index + 1}',
+                district='Kampala',
+                division='Central',
+                parish='Bukoto',
+                village=f'Village {index + 1}',
+                phone='0700222333',
+                is_default=index == 0,
+            )
+
+        token = str(RefreshToken.for_user(user).access_token)
+        self.client.credentials(HTTP_AUTHORIZATION=f'Bearer {token}')
+
+        limit_response = self.client.post(reverse('customer_addresses'), {
+            'label': 'Address 6',
+            'address': 'Location 6',
+            'district': 'Kampala',
+            'division': 'Central',
+            'parish': 'Bukoto',
+            'village': 'Village 6',
+            'phone': '0700222333',
+        }, format='json')
+        self.assertEqual(limit_response.status_code, 400)
+        self.assertIn('delivery locations', str(limit_response.data).lower())
+
+        chosen_address = customer.addresses.order_by('-created_at').last()
+        category = Category.objects.create(category_name='Hair Care 2')
+        brand = Brand.objects.create(brand_name='Glow 2')
+        product = Product.objects.create(
+            category=category,
+            brand=brand,
+            product_name='Shampoo 2',
+            buying_price=1000,
+            selling_price=2000,
+            quantity_in_stock=5,
+            sku='SKU-ADDRESS-001',
+        )
+
+        cart_response = self.client.post(reverse('cart_add'), {
+            'product_id': product.id,
+            'quantity': 1,
+        }, HTTP_X_SESSION_ID='address-selection-cart')
+        self.assertEqual(cart_response.status_code, 200)
+
+        order_response = self.client.post(reverse('create_order'), {
+            'address_id': chosen_address.id,
+            'phone_number': chosen_address.phone,
+            'payment_method': 'PAY_ON_DELIVERY',
+        }, format='json')
+        self.assertEqual(order_response.status_code, 201)
+        order = Order.objects.get(order_number=order_response.data['order']['order_number'])
+        self.assertEqual(order.delivery_address, chosen_address.address)
+        self.assertEqual(order.phone_number, chosen_address.phone)
+
     def test_cart_and_order_flow(self):
         seller = User.objects.create_user(
             email='seller-order-alert@example.com',
@@ -913,6 +1016,7 @@ class AuthAndProfileAPITests(TestCase):
 
         order = Order.objects.get(order_number=order_response.data['order']['order_number'])
         self.assertEqual(order.order_status, 'Pending')
+        self.assertEqual(order.delivery_address, 'Kampala')
         self.assertEqual(order.delivery.delivery_status, 'Preparing')
         seller_notification = Notification.objects.filter(user=seller, notification_type='order').first()
         self.assertIsNotNone(seller_notification)
