@@ -27,30 +27,36 @@ class RegisterSerializer(serializers.ModelSerializer):
         fields = ['first_name', 'last_name', 'email', 'phone_number', 'password', 'salon_name', 'location', 'role']
 
     def validate(self, attrs):
-        email = str(attrs.get('email') or '').strip().lower()
-        phone_number = str(attrs.get('phone_number') or '').strip()
+        email_raw = attrs.get('email')
+        email = str(email_raw).strip().lower() if email_raw not in (None, '') else None
+        phone_raw = attrs.get('phone_number')
+        phone_number = str(phone_raw).strip() if phone_raw not in (None, '') else None
+
         role = str(attrs.get('role') or 'Customer').strip()
         normalized_role = role.title()
-        if normalized_role in {'Customer', 'Seller'}:
-            attrs['role'] = normalized_role
-        else:
-            attrs['role'] = 'Customer'
+        attrs['role'] = normalized_role if normalized_role in {'Customer', 'Seller'} else 'Customer'
         role = attrs['role']
 
+        # Sellers must provide an email
         if role == 'Seller' and not email:
-            raise serializers.ValidationError({'email': 'Email is required.'})
-        if not phone_number:
-            raise serializers.ValidationError({'phone_number': 'Phone number is required.'})
+            raise serializers.ValidationError({'email': 'Email is required for sellers.'})
+
+        # Require at least one contact method for all users
+        if not email and not phone_number:
+            raise serializers.ValidationError('Provide at least an email or phone number.')
+
+        # Only check uniqueness when values are provided
         if email and User.objects.filter(email__iexact=email).exists():
             raise serializers.ValidationError({'email': 'An account with this email address already exists.'})
-        if User.objects.filter(phone_number=phone_number).exists():
+        if phone_number and User.objects.filter(phone_number=phone_number).exists():
             raise serializers.ValidationError({'phone_number': 'An account with this phone number already exists.'})
+
         if role == 'Customer':
             if not str(attrs.get('salon_name') or '').strip():
                 raise serializers.ValidationError({'salon_name': 'Salon name is required.'})
 
-        attrs['email'] = email or None
-        attrs['phone_number'] = phone_number or None
+        attrs['email'] = email
+        attrs['phone_number'] = phone_number
         return attrs
 
     def create(self, validated_data):
@@ -59,7 +65,7 @@ class RegisterSerializer(serializers.ModelSerializer):
         salon_name = validated_data.pop('salon_name', '')
         location = validated_data.pop('location', '')
         user = User.objects.create_user(
-            email=validated_data['email'],
+            email=validated_data.get('email'),
             password=password,
             first_name=validated_data.get('first_name', ''),
             last_name=validated_data.get('last_name', ''),
