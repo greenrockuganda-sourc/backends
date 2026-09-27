@@ -1513,20 +1513,8 @@ class HomeProfileAPIView(APIView):
             payload['parish'] = getattr(customer, 'parish', '') if customer else ''
             payload['village'] = customer.city if customer else ''
             return Response(payload, status=status.HTTP_200_OK)
-        return Response({
-            'first_name': 'Guest',
-            'last_name': '',
-            'email': 'guest@growsalon.com',
-            'phone_number': '',
-            'role': 'Customer',
-            'profile_image': '',
-            'addresses': [],
-            'address': '',
-            'district': '',
-            'division': '',
-            'parish': '',
-            'village': '',
-        }, status=status.HTTP_200_OK)
+        # Do not expose a guest account. Require authentication for profile access.
+        return Response({'detail': 'Authentication credentials were not provided.'}, status=status.HTTP_401_UNAUTHORIZED)
 
 
 class ProfileAPIView(APIView):
