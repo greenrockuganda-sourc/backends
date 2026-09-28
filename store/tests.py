@@ -1367,6 +1367,15 @@ class AdminReceiptPDFAndEmailTests(TestCase):
         content = b''.join(response.streaming_content)
         self.assertTrue(content)
 
+    def test_receipt_printer_payload_is_thermal_printer_safe(self):
+        receipt = self.create_test_receipt()
+        payload = __import__('store.views', fromlist=['build_receipt_printer_payload']).build_receipt_printer_payload(receipt)
+
+        self.assertIn('\x1b', payload)
+        self.assertTrue(all(len(line) <= 42 for line in payload.splitlines() if line and not line.startswith('\x1b')))
+        self.assertIn('GLOW', payload.upper())
+        self.assertIn('REC-1234', payload)
+
     def test_admin_can_send_receipt_email_with_attachment(self):
         receipt = self.create_test_receipt()
         response = self.client.post(
@@ -1445,6 +1454,92 @@ class AdminReceiptPDFAndEmailTests(TestCase):
             self.assertIn(expected_text, rendered)
             self.assertIn(status, rendered)
             self.assertIn('20 Sep 2026, 07:00 PM', rendered)
+
+    @override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend', TIME_ZONE='Africa/Kampala')
+    def test_admin_delivery_update_sends_delivered_email(self):
+        admin_user = User.objects.create_user(
+            email='admin-delivery@example.com',
+            password='StrongPass123!',
+            first_name='Admin',
+            last_name='Delivery',
+            is_staff=True,
+            is_superuser=True,
+            role='Admin',
+        )
+        customer_user = User.objects.create_user(
+            email='customer-delivery@example.com',
+            password='StrongPass123!',
+            first_name='Jane',
+            last_name='Customer',
+            role='Customer',
+            is_active=True,
+        )
+        customer = Customer.objects.create(user=customer_user)
+        order = Order.objects.create(
+            customer=customer,
+            order_number='ORD-DELIVERY-EMAIL',
+            total_amount='25000',
+            payment_method='PAY_ON_DELIVERY',
+            order_status='Out for Delivery',
+            delivery_address='Kampala, Uganda',
+            phone_number='0700000000',
+        )
+        delivery = Delivery.objects.create(
+            order=order,
+            delivery_status='Out for Delivery',
+            estimated_delivery_time='2026-09-27T15:30:00+03:00',
+        )
+
+        self.client.force_authenticate(user=admin_user)
+        response = self.client.patch(
+            reverse('admin_delivery_detail', kwargs={'delivery_id': delivery.id}),
+            {'delivery_status': 'Delivered'},
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, 200)
+        order = Order.objects.get(pk=order.pk)
+        self.assertEqual(order.order_status, 'Delivered')
+        delivery = Delivery.objects.get(pk=delivery.pk)
+        self.assertTrue(delivery.delivery_date is not None)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn('order delivered', mail.outbox[0].subject.lower())
+        self.assertIn('order has been delivered successfully', mail.outbox[0].body.lower())
+
+    @override_settings(EMAIL_BACKEND='django.core.mail.backends.locmem.EmailBackend', TIME_ZONE='Africa/Kampala')
+    def test_order_status_email_uses_local_delivery_time_and_date(self):
+        customer_user = User.objects.create_user(
+            email='timezone-order@example.com',
+            password='StrongPass123!',
+            first_name='Time',
+            last_name='Zone',
+            role='Customer',
+            is_active=True,
+        )
+        customer = Customer.objects.create(user=customer_user)
+        order = Order.objects.create(
+            customer=customer,
+            order_number='ORD-TIMEZONE-LOCAL',
+            total_amount='25000',
+            payment_method='PAY_ON_DELIVERY',
+            order_status='Delivered',
+            delivery_address='Kampala, Uganda',
+            phone_number='0700000000',
+        )
+        delivery = Delivery.objects.create(
+            order=order,
+            delivery_status='Delivered',
+            delivery_date='2026-09-20T16:00:00Z',
+            estimated_delivery_time='2026-09-20T16:00:00Z',
+        )
+
+        subject, message = __import__('store.views', fromlist=['_build_order_status_message'])._build_order_status_message(order, 'Delivered')
+        sent = __import__('store.views', fromlist=['_send_order_status_email'])._send_order_status_email(order, subject, message)
+
+        self.assertTrue(sent)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertIn('20 Sep 2026', mail.outbox[0].body)
+        self.assertIn('07:00 PM', mail.outbox[0].body)
 
 class HomeCatalogSeedTests(TestCase):
     def test_seed_home_catalog_creates_products_for_each_category(self):

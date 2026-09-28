@@ -338,32 +338,54 @@ def build_receipt_printer_payload(receipt):
     order = receipt.order
     customer = order.customer.user
     customer_name = customer.get_full_name() or customer.email
+    printer_width = 42
+
+    def truncate_text(value, width=printer_width):
+        text = str(value or '').strip()
+        if len(text) <= width:
+            return text
+        if width <= 1:
+            return text[:1]
+        return text[:width - 1] + '…'
+
+    def make_line(label, value=None):
+        if value is None:
+            return truncate_text(label)
+        label_text = truncate_text(label, max(10, printer_width // 2 - 1))
+        value_text = truncate_text(value, max(12, printer_width - len(label_text) - 1))
+        spacing = max(1, printer_width - len(label_text) - len(value_text))
+        return f'{label_text}{" " * spacing}{value_text}'
+
     line_items = []
     for item in order.items.select_related('product').all():
         product_name = item.product_name or getattr(item.product, 'product_name', 'Item')
-        line_items.append(f"{product_name} x{item.quantity} {item.subtotal}")
+        label = f"{truncate_text(product_name, 22)} x{item.quantity}"
+        line_items.append(make_line(label, f'UGX {item.subtotal}'))
 
     lines = [
-        'GROW SALON',
-        'Professional Receipt',
+        '\x1b\x40',
+        '\x1b\x61\x01\x1b\x21\x08GLOW\x1b\x21\x00',
+        '\x1b\x61\x00Professional Receipt',
         f'Receipt: {receipt.receipt_number}',
         f'Date: {receipt.receipt_date.strftime("%Y-%m-%d %H:%M")}',
         f'Order: {order.order_number}',
-        f'Customer: {customer_name}',
-        f'Phone: {order.phone_number or "N/A"}',
-        '------------------------------',
+        f'Customer: {truncate_text(customer_name, 38)}',
+        f'Phone: {truncate_text(order.phone_number or "N/A", 38)}',
+        '------------------------------------------',
     ]
     lines.extend(line_items or ['No items available.'])
     lines.extend([
-        '------------------------------',
-        f'Subtotal: {receipt.subtotal}',
-        f'Tax: {receipt.tax}',
-        f'Delivery: {receipt.delivery_fee}',
-        f'Total: {receipt.total_amount}',
-        'Thank you for shopping with GrowSalon',
+        '------------------------------------------',
+        make_line('Subtotal', f'UGX {receipt.subtotal}'),
+        make_line('Tax', f'UGX {receipt.tax}'),
+        make_line('Delivery', f'UGX {receipt.delivery_fee}'),
+        make_line('TOTAL', f'UGX {receipt.total_amount}'),
+        '\x1b\x21\x08Thank you for shopping with Glow\x1b\x21\x00',
         'Please come again.',
+        '\n\x1d\x56\x01',
     ])
-    return '\n'.join(lines)
+    payload = '\n'.join(lines)
+    return payload
 
 
 def generate_receipt_pdf_bytes(receipt, request):
@@ -467,6 +489,28 @@ def _ensure_delivery_for_order(order, delivery_status='Preparing', delivery_pers
     return delivery
 
 
+def _notify_delivery_status_change(order, delivery, previous_status=None):
+    if not order or not delivery:
+        return
+
+    new_status = delivery.delivery_status
+    if new_status == 'Out for Delivery':
+        if previous_status != new_status:
+            _add_order_status_history(order, 'Out for Delivery', 'Out for delivery', 'Your order is on the way and a rider is heading to your address.')
+        subject, message = _build_order_status_message(order, 'Out for Delivery')
+        _send_order_status_email(order, subject, message)
+        _send_order_status_sms(order, message)
+    elif new_status == 'Delivered':
+        if not delivery.delivery_date:
+            delivery.delivery_date = timezone.now()
+            delivery.save(update_fields=['delivery_date'])
+        if previous_status != new_status:
+            _add_order_status_history(order, 'Delivered', 'Delivered', 'Your order has been delivered successfully.')
+        subject, message = _build_order_status_message(order, 'Delivered')
+        _send_order_status_email(order, subject, message)
+        _send_order_status_sms(order, message)
+
+
 def _apply_order_status_update(order, new_status, request_data=None):
     request_data = request_data or {}
     order.order_status = new_status
@@ -474,6 +518,7 @@ def _apply_order_status_update(order, new_status, request_data=None):
     ensure_receipt_for_order(order)
 
     if order.order_status in {'Out for Delivery', 'Delivered'}:
+        previous_delivery_status = getattr(getattr(order, 'delivery', None), 'delivery_status', None)
         delivery = _ensure_delivery_for_order(
             order,
             delivery_status=order.order_status,
@@ -481,18 +526,12 @@ def _apply_order_status_update(order, new_status, request_data=None):
             delivery_notes=(request_data.get('delivery_notes') or None),
         )
         if order.order_status == 'Out for Delivery':
-            _add_order_status_history(order, 'Out for Delivery', 'Out for delivery', 'Your order is on the way and a rider is heading to your address.')
-            subject, message = _build_order_status_message(order, 'Out for Delivery')
-            _send_order_status_email(order, subject, message)
-            _send_order_status_sms(order, message)
+            _notify_delivery_status_change(order, delivery, previous_delivery_status)
         elif order.order_status == 'Delivered':
             delivery.delivery_status = 'Delivered'
             delivery.delivery_date = timezone.now()
             delivery.save(update_fields=['delivery_status', 'delivery_date'])
-            _add_order_status_history(order, 'Delivered', 'Delivered', 'Your order has been delivered successfully.')
-            subject, message = _build_order_status_message(order, 'Delivered')
-            _send_order_status_email(order, subject, message)
-            _send_order_status_sms(order, message)
+            _notify_delivery_status_change(order, delivery, previous_delivery_status)
     else:
         _add_order_status_history(order, order.order_status, f"Status updated to {order.order_status}", f"Your order is now {order.order_status}.")
         subject, message = _build_order_status_message(order, order.order_status)
@@ -772,7 +811,22 @@ def _send_order_status_email(order, subject, message):
             'image_url': image_url,
         })
 
-    delivery_timestamp = order.order_date or timezone.now()
+    delivery = getattr(order, 'delivery', None)
+    delivery_timestamp = None
+    if delivery is not None:
+        delivery_timestamp = delivery.delivery_date or getattr(delivery, 'estimated_delivery_time', None)
+        if delivery_timestamp and not hasattr(delivery_timestamp, 'tzinfo'):
+            try:
+                from django.utils.dateparse import parse_datetime
+                parsed = parse_datetime(str(delivery_timestamp))
+                if parsed is not None:
+                    delivery_timestamp = parsed
+            except Exception:
+                delivery_timestamp = None
+    if delivery_timestamp is None:
+        delivery_timestamp = order.order_date or timezone.now()
+    if hasattr(delivery_timestamp, 'tzinfo'):
+        delivery_timestamp = timezone.localtime(delivery_timestamp)
     estimated_delivery = delivery_timestamp.strftime('%d %b %Y, %I:%M %p')
     shipping_address = order.delivery_address or getattr(order.customer, 'address', '') or ''
     try:
@@ -783,7 +837,7 @@ def _send_order_status_email(order, subject, message):
             'tracking_url': tracking_url,
             'company_name': 'Glow',
             'order_status': getattr(order, 'order_status', 'Confirmed'),
-            'order_date': order.order_date or timezone.now(),
+            'order_date': timezone.localtime(order.order_date or timezone.now()),
             'estimated_delivery_date': estimated_delivery,
             'shipping_address': shipping_address,
             'order_items': order_items,
@@ -2547,9 +2601,19 @@ class AdminDeliveryDetailAPIView(APIView):
             delivery.delivery_date = timezone.now()
         delivery.save()
 
-        if delivery.order and delivery.order.order_status != delivery.delivery_status:
-            delivery.order.order_status = delivery.delivery_status
-            delivery.order.save(update_fields=['order_status'])
+        previous_status = delivery.delivery_status
+        if validated.get('delivery_status') is not None:
+            delivery.delivery_status = validated['delivery_status']
+        if delivery.delivery_status == 'Delivered' and not delivery.delivery_date:
+            delivery.delivery_date = timezone.now()
+        delivery.save()
+
+        if delivery.order:
+            if delivery.order.order_status != delivery.delivery_status:
+                delivery.order.order_status = delivery.delivery_status
+                delivery.order.save(update_fields=['order_status'])
+            if delivery.delivery_status in {'Out for Delivery', 'Delivered'}:
+                _notify_delivery_status_change(delivery.order, delivery, previous_status)
         return Response({'message': 'Delivery updated.'}, status=status.HTTP_200_OK)
 
 
@@ -3564,8 +3628,10 @@ class AdminCreateDeliveryAPIView(APIView):
             delivery_notes=request.data.get('delivery_notes') or None,
         )
         if delivery_status in {'Out for Delivery', 'Delivered'}:
+            previous_status = order.order_status
             order.order_status = delivery_status
             order.save(update_fields=['order_status'])
+            _notify_delivery_status_change(order, delivery, previous_status)
         return Response({
             'id': delivery.id,
             'order_id': order.id,
