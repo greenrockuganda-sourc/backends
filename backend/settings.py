@@ -285,6 +285,9 @@ else:
 
 SERVER_EMAIL = DEFAULT_FROM_EMAIL
 ORDER_TRACKING_BASE_URL = os.getenv('ORDER_TRACKING_BASE_URL', 'http://127.0.0.1:8000/track')
+TEXTBEE_API_KEY = os.getenv('TEXTBEE_API_KEY', '').strip()
+TEXTBEE_API_URL = os.getenv('TEXTBEE_API_URL', 'https://api.textbee.dev/api/v1/gateway/send-sms').strip()
+TEXTBEE_SENDER_ID = os.getenv('TEXTBEE_SENDER_ID', '').strip()
 TWILIO_ACCOUNT_SID = os.getenv('TWILIO_ACCOUNT_SID', '')
 TWILIO_AUTH_TOKEN = os.getenv('TWILIO_AUTH_TOKEN', '')
 TWILIO_PHONE_NUMBER = os.getenv('TWILIO_PHONE_NUMBER', '')

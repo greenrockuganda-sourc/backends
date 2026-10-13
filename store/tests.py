@@ -85,6 +85,43 @@ class EmailConfigTests(TestCase):
             {'to': [{'email': 'two@example.com'}]},
         ])
 
+    @override_settings(TEXTBEE_API_KEY='test-textbee-key', TWILIO_ACCOUNT_SID='', TWILIO_AUTH_TOKEN='', TWILIO_PHONE_NUMBER='')
+    @patch('store.views.urlopen')
+    def test_textbee_sms_is_used_for_order_status_updates(self, mock_urlopen):
+        mock_urlopen.return_value.__enter__.return_value.status = 200
+
+        customer_user = User.objects.create_user(
+            email='sms-customer@example.com',
+            password='StrongPass123!',
+            first_name='Text',
+            last_name='Bee',
+            role='Customer',
+            is_active=True,
+        )
+        customer = Customer.objects.create(user=customer_user)
+        order = Order.objects.create(
+            customer=customer,
+            order_number='ORD-TEXTBEE-SMS',
+            total_amount='25000',
+            payment_method='PAY_ON_DELIVERY',
+            order_status='Pending',
+            delivery_address='Kampala',
+            phone_number='0701234567',
+        )
+
+        from store.views import _send_order_status_sms
+
+        self.assertTrue(_send_order_status_sms(order, 'Glow: your order ORD-TEXTBEE-SMS is out for delivery.'))
+        self.assertEqual(mock_urlopen.call_count, 1)
+        request = mock_urlopen.call_args_list[0].args[0]
+        self.assertEqual(request.full_url, 'https://api.textbee.dev/api/v1/gateway/send-sms')
+        # TextBee uses x-api-key header
+        headers = dict((k.lower(), v) for k, v in request.header_items())
+        self.assertEqual(headers.get('x-api-key'), 'test-textbee-key')
+        payload = json.loads(request.data.decode('utf-8'))
+        self.assertEqual(payload['recipients'], ['+256701234567'])
+        self.assertIn('ORD-TEXTBEE-SMS', payload['message'])
+
 
 class ConnectivityConfigTests(TestCase):
     def test_parse_origin_list_includes_env_and_local_defaults(self):

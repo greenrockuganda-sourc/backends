@@ -813,20 +813,36 @@ def _send_order_status_email(order, subject, message):
 
     delivery = getattr(order, 'delivery', None)
     delivery_timestamp = None
+    candidate_values = []
     if delivery is not None:
-        delivery_timestamp = delivery.delivery_date or getattr(delivery, 'estimated_delivery_time', None)
-        if delivery_timestamp and not hasattr(delivery_timestamp, 'tzinfo'):
+        candidate_values.extend([
+            getattr(delivery, 'delivery_date', None),
+            getattr(delivery, 'estimated_delivery_time', None),
+        ])
+    candidate_values.extend([getattr(order, 'order_date', None), timezone.now()])
+
+    for candidate in candidate_values:
+        if candidate in (None, ''):
+            continue
+        if hasattr(candidate, 'strftime'):
+            delivery_timestamp = candidate
+            break
+        if isinstance(candidate, str):
             try:
                 from django.utils.dateparse import parse_datetime
-                parsed = parse_datetime(str(delivery_timestamp))
-                if parsed is not None:
-                    delivery_timestamp = parsed
+                parsed = parse_datetime(candidate.strip())
             except Exception:
-                delivery_timestamp = None
+                parsed = None
+            if parsed is not None:
+                delivery_timestamp = parsed
+                break
+
     if delivery_timestamp is None:
-        delivery_timestamp = order.order_date or timezone.now()
+        delivery_timestamp = timezone.now()
     if hasattr(delivery_timestamp, 'tzinfo'):
         delivery_timestamp = timezone.localtime(delivery_timestamp)
+    if not hasattr(delivery_timestamp, 'strftime'):
+        delivery_timestamp = timezone.now()
     estimated_delivery = delivery_timestamp.strftime('%d %b %Y, %I:%M %p')
     shipping_address = order.delivery_address or getattr(order.customer, 'address', '') or ''
     try:
@@ -896,12 +912,43 @@ def _send_order_status_email(order, subject, message):
     return _send_email_message(to_email, subject, html_content, attachments=attachments_param if 'attachments_param' in locals() else None, reply_to=[getattr(settings, 'DEFAULT_FROM_EMAIL', '')])
 
 
+def _send_textbee_sms(phone_number, message):
+    api_key = (getattr(settings, 'TEXTBEE_API_KEY', '') or os.getenv('TEXTBEE_API_KEY', '') or '').strip()
+    if not api_key:
+        return False
+
+    api_url = (getattr(settings, 'TEXTBEE_API_URL', '') or os.getenv('TEXTBEE_API_URL', 'https://api.textbee.dev/api/v1/gateway/send-sms') or 'https://api.textbee.dev/api/v1/gateway/send-sms').strip()
+    sender_id = (getattr(settings, 'TEXTBEE_SENDER_ID', '') or os.getenv('TEXTBEE_SENDER_ID', '') or '').strip()
+
+    # TextBee expects { message: string, recipients: ["+123..."] } and x-api-key header
+    payload = {'message': message, 'recipients': [phone_number]}
+    if sender_id:
+        payload['sender'] = sender_id
+
+    request = Request(
+        api_url,
+        data=json.dumps(payload).encode('utf-8'),
+        headers={
+            'x-api-key': api_key,
+            'Content-Type': 'application/json',
+            'Accept': 'application/json',
+        },
+        method='POST',
+    )
+
+    try:
+        with urlopen(request, timeout=10) as response:
+            return response.status < 400
+    except Exception:
+        logging.getLogger(__name__).exception('TextBee SMS send failed for %s.', phone_number)
+        return False
+
+
 def _send_order_status_sms(order, message):
     customer_user = getattr(getattr(order, 'customer', None), 'user', None)
     phone_number = getattr(customer_user, 'phone_number', None) or getattr(order, 'phone_number', None)
     if not phone_number:
         return False
-
 
     def _send_web_push(subscription_info, payload):
         """Send a Web Push (Push API) payload to a browser subscription.
@@ -938,12 +985,15 @@ def _send_order_status_sms(order, message):
     elif not phone_number.startswith('+'):
         phone_number = f'+{phone_number}'
 
+    if _send_textbee_sms(phone_number, message):
+        return True
+
     account_sid = (getattr(settings, 'TWILIO_ACCOUNT_SID', '') or os.getenv('TWILIO_ACCOUNT_SID', '') or '').strip()
     auth_token = (getattr(settings, 'TWILIO_AUTH_TOKEN', '') or os.getenv('TWILIO_AUTH_TOKEN', '') or '').strip()
     from_number = (getattr(settings, 'TWILIO_PHONE_NUMBER', '') or os.getenv('TWILIO_PHONE_NUMBER', '') or '').strip()
 
     if not account_sid or not auth_token or not from_number:
-        logging.getLogger(__name__).info('Twilio SMS credentials are not configured for order %s.', order.order_number)
+        logging.getLogger(__name__).info('No SMS provider credentials are configured for order %s.', order.order_number)
         return False
 
     payload = urlencode({'To': phone_number, 'From': from_number, 'Body': message}).encode('utf-8')
