@@ -432,3 +432,24 @@ class Review(models.Model):
 
     def __str__(self):
         return f"{self.customer} - {self.rating}"
+
+
+class PasswordResetCode(models.Model):
+    """Short-lived one-time code sent by email/SMS for app password resets.
+
+    Only a hash of the code is stored; the code itself is never returned by
+    the API.
+    """
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='password_reset_codes')
+    code_hash = models.CharField(max_length=128)
+    attempts = models.PositiveSmallIntegerField(default=0)
+    used = models.BooleanField(default=False)
+    expires_at = models.DateTimeField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'password_reset_codes'
+
+    def __str__(self):
+        return f"Reset code for {self.user_id}"

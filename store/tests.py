@@ -1,4 +1,5 @@
 import json
+import re
 from datetime import timedelta
 from unittest.mock import patch
 
@@ -738,15 +739,21 @@ class AuthAndProfileAPITests(TestCase):
             is_active=True,
         )
 
-        forgot_response = self.client.post(reverse('forgot_password'), {'identifier': user.phone_number}, format='json')
+        with patch('store.views._send_email_message') as send_email, patch('store.views._send_textbee_sms') as send_sms:
+            forgot_response = self.client.post(reverse('forgot_password'), {'identifier': user.phone_number}, format='json')
 
         self.assertEqual(forgot_response.status_code, 200)
-        self.assertIn('uid', forgot_response.data)
-        self.assertIn('token', forgot_response.data)
+        # The reset secret must only travel by email/SMS, never in the response.
+        self.assertNotIn('uid', forgot_response.data)
+        self.assertNotIn('token', forgot_response.data)
+        self.assertNotIn('code', forgot_response.data)
+        sms_text = send_sms.call_args[0][1]
+        code = re.search(r'\b(\d{6})\b', sms_text).group(1)
+        self.assertIn(code, send_email.call_args[0][2])
 
         reset_response = self.client.post(reverse('reset_password'), {
-            'uid': forgot_response.data['uid'],
-            'token': forgot_response.data['token'],
+            'identifier': user.phone_number,
+            'code': code,
             'new_password': 'NewPass123!',
             'confirm_password': 'NewPass123!',
         }, format='json')
@@ -754,6 +761,75 @@ class AuthAndProfileAPITests(TestCase):
         self.assertEqual(reset_response.status_code, 200)
         user.refresh_from_db()
         self.assertTrue(user.check_password('NewPass123!'))
+
+        reused = self.client.post(reverse('reset_password'), {
+            'identifier': user.phone_number,
+            'code': code,
+            'new_password': 'Another123!',
+            'confirm_password': 'Another123!',
+        }, format='json')
+        self.assertEqual(reused.status_code, 400)
+
+    def test_password_reset_code_locks_after_too_many_wrong_attempts(self):
+        user = User.objects.create_user(email='bruteforce@example.com', password='OldPass123!', phone_number='0700888111')
+        with patch('store.views._send_email_message'), patch('store.views._send_textbee_sms') as send_sms:
+            self.client.post(reverse('forgot_password'), {'identifier': user.email}, format='json')
+        code = re.search(r'\b(\d{6})\b', send_sms.call_args[0][1]).group(1)
+        wrong = '000000' if code != '000000' else '111111'
+
+        payload = {'identifier': user.email, 'new_password': 'NewPass123!', 'confirm_password': 'NewPass123!'}
+        for _ in range(5):
+            response = self.client.post(reverse('reset_password'), {**payload, 'code': wrong}, format='json')
+            self.assertEqual(response.status_code, 400)
+
+        locked = self.client.post(reverse('reset_password'), {**payload, 'code': code}, format='json')
+        self.assertEqual(locked.status_code, 400)
+        user.refresh_from_db()
+        self.assertTrue(user.check_password('OldPass123!'))
+
+    def test_password_reset_for_unknown_account_looks_the_same(self):
+        with patch('store.views._send_email_message') as send_email:
+            response = self.client.post(reverse('forgot_password'), {'identifier': 'nobody@example.com'}, format='json')
+        self.assertEqual(response.status_code, 200)
+        send_email.assert_not_called()
+
+    def test_dashboard_user_gets_reset_link_by_email(self):
+        user = User.objects.create_user(email='seller-reset@example.com', password='OldPass123!', role='Seller')
+        with patch('store.views._send_email_message') as send_email, patch('store.views._send_textbee_sms'):
+            self.client.post(reverse('forgot_password'), {'identifier': user.email}, format='json')
+        html = send_email.call_args[0][2]
+        match = re.search(r'uid=([^&"]+)&amp;token=([^"&<]+)|uid=([^&"]+)&token=([^"&<]+)', html)
+        uid, token = (match.group(1), match.group(2)) if match.group(1) else (match.group(3), match.group(4))
+
+        response = self.client.post(reverse('reset_password'), {
+            'uid': uid, 'token': token, 'new_password': 'NewPass123!', 'confirm_password': 'NewPass123!',
+        }, format='json')
+        self.assertEqual(response.status_code, 200)
+        user.refresh_from_db()
+        self.assertTrue(user.check_password('NewPass123!'))
+
+    def test_change_password_requires_current_password(self):
+        user = User.objects.create_user(email='changer@example.com', password='OldPass123!')
+        self.client.force_authenticate(user=user)
+
+        wrong = self.client.post(reverse('change_password'), {
+            'current_password': 'Wrong123!', 'new_password': 'NewPass123!', 'confirm_password': 'NewPass123!',
+        }, format='json')
+        self.assertEqual(wrong.status_code, 400)
+
+        ok = self.client.post(reverse('change_password'), {
+            'current_password': 'OldPass123!', 'new_password': 'NewPass123!', 'confirm_password': 'NewPass123!',
+        }, format='json')
+        self.assertEqual(ok.status_code, 200)
+        user.refresh_from_db()
+        self.assertTrue(user.check_password('NewPass123!'))
+        self.client.force_authenticate(user=None)
+
+    def test_change_password_requires_login(self):
+        response = self.client.post(reverse('change_password'), {
+            'current_password': 'x', 'new_password': 'NewPass123!', 'confirm_password': 'NewPass123!',
+        }, format='json')
+        self.assertIn(response.status_code, (401, 403))
 
     def test_inactive_user_cannot_access_profile(self):
         user = User.objects.create_user(
@@ -1589,3 +1665,84 @@ class HomeCatalogSeedTests(TestCase):
             self.assertIn(category_name, existing_categories)
 
         self.assertGreaterEqual(Product.objects.count(), 8)
+
+
+class DeleteAccountAPITests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.user = User.objects.create_user(
+            email='delete-me@example.com',
+            password='StrongPass123!',
+            phone_number='+256700000099',
+            first_name='Dee',
+            last_name='Leet',
+            role='Customer',
+        )
+        self.customer = Customer.objects.create(user=self.user, salon_name='Dee Salon', address='Plot 1, Kampala')
+        CustomerAddress.objects.create(customer=self.customer, address='Plot 1', phone='+256700000099')
+        Notification.objects.create(user=self.user, title='Hi', message='Welcome')
+
+    def _delete(self, password='StrongPass123!', identifier='delete-me@example.com'):
+        return self.client.post(
+            reverse('delete_account'),
+            {'email_or_phone': identifier, 'password': password},
+            format='json',
+        )
+
+    def test_wrong_password_is_rejected(self):
+        response = self._delete(password='wrong')
+        self.assertEqual(response.status_code, 401)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.is_active)
+
+    def test_active_order_blocks_deletion(self):
+        Order.objects.create(customer=self.customer, order_number='GLW-DEL-1', order_status='Processing')
+        response = self._delete()
+        self.assertEqual(response.status_code, 409)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.is_active)
+
+    def test_deletion_erases_personal_data_and_keeps_completed_orders(self):
+        order = Order.objects.create(
+            customer=self.customer,
+            order_number='GLW-DEL-2',
+            order_status='Delivered',
+            delivery_address='Plot 1, Kampala',
+            phone_number='+256700000099',
+            total_amount=50000,
+        )
+
+        response = self._delete(identifier='+256700000099')
+
+        self.assertEqual(response.status_code, 200)
+        self.user.refresh_from_db()
+        self.customer.refresh_from_db()
+        order.refresh_from_db()
+        self.assertFalse(self.user.is_active)
+        self.assertFalse(self.user.has_usable_password())
+        self.assertNotEqual(self.user.email, 'delete-me@example.com')
+        self.assertIsNone(self.user.phone_number)
+        self.assertIsNone(self.customer.salon_name)
+        self.assertIsNone(self.customer.address)
+        self.assertFalse(CustomerAddress.objects.filter(customer=self.customer).exists())
+        self.assertFalse(Notification.objects.filter(user=self.user).exists())
+        self.assertIsNone(order.delivery_address)
+        self.assertIsNone(order.phone_number)
+        self.assertEqual(order.total_amount, 50000)
+
+        login = self.client.post(
+            reverse('login'),
+            {'email_or_phone': 'delete-me@example.com', 'password': 'StrongPass123!'},
+            format='json',
+        )
+        self.assertEqual(login.status_code, 401)
+
+    def test_staff_accounts_cannot_be_deleted(self):
+        User.objects.create_user(email='admin-del@example.com', password='StrongPass123!', role='Admin')
+        response = self._delete(identifier='admin-del@example.com')
+        self.assertEqual(response.status_code, 403)
+
+    def test_delete_account_page_renders(self):
+        response = self.client.get(reverse('delete_account_screen'))
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'Delete your Glow account')

@@ -103,14 +103,24 @@ class ForgotPasswordSerializer(serializers.Serializer):
 
 
 class ResetPasswordSerializer(serializers.Serializer):
-    uid = serializers.CharField()
-    token = serializers.CharField()
+    """Accepts either uid + token (emailed dashboard link) or identifier + code (app)."""
+
+    uid = serializers.CharField(required=False, allow_blank=True)
+    token = serializers.CharField(required=False, allow_blank=True)
+    identifier = serializers.CharField(required=False, allow_blank=True)
+    code = serializers.CharField(required=False, allow_blank=True)
     new_password = serializers.CharField(write_only=True, min_length=8)
     confirm_password = serializers.CharField(write_only=True, min_length=8)
 
     def validate(self, attrs):
         if attrs['new_password'] != attrs['confirm_password']:
             raise serializers.ValidationError({'confirm_password': 'Passwords do not match.'})
+        attrs['identifier'] = str(attrs.get('identifier') or '').strip()
+        attrs['code'] = str(attrs.get('code') or '').strip()
+        has_code = bool(attrs['identifier'] and attrs['code'])
+        has_link = bool(attrs.get('uid') and attrs.get('token'))
+        if not has_code and not has_link:
+            raise serializers.ValidationError('Enter the 6-digit code we sent you.')
         return attrs
 
 

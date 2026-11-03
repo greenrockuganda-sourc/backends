@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import secrets
 from datetime import timedelta
 from decimal import Decimal
 from email.utils import parseaddr
@@ -15,6 +16,7 @@ from urllib.request import Request, urlopen
 import cloudinary
 import cloudinary.uploader
 from django.contrib.auth import authenticate, get_user_model
+from django.contrib.auth.hashers import check_password, make_password
 from django.contrib.auth.tokens import default_token_generator
 from django.core.cache import cache
 from django.core.files.base import ContentFile
@@ -25,7 +27,8 @@ from django.http import FileResponse, HttpResponse
 from django.template.loader import render_to_string
 from django.conf import settings
 from django.core.mail import EmailMessage, get_connection
-from django.core.validators import ValidationError, validate_email
+from django.core.exceptions import ValidationError
+from django.core.validators import validate_email
 from email.mime.image import MIMEImage
 import tempfile
 from reportlab.pdfgen import canvas
@@ -49,7 +52,7 @@ from rest_framework.views import APIView
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
 
-from .models import Brand, CartItem, Category, Customer, CustomerAddress, Delivery, Notification, PushToken, Order, OrderItem, OrderStatusHistory, Payment, Product, Recipe, Receipt, Review, ShoppingCart, WebPushSubscription
+from .models import Brand, CartItem, Category, Customer, CustomerAddress, Delivery, Notification, PasswordResetCode, PushToken, Order, OrderItem, OrderStatusHistory, Payment, Product, Recipe, Receipt, Review, ShoppingCart, WebPushSubscription
 from .serializers import (
     BrandSerializer,
     BrandWriteSerializer,
@@ -80,6 +83,9 @@ from .serializers import (
 )
 
 User = get_user_model()
+PASSWORD_RESET_CODE_LIFETIME = timedelta(minutes=15)
+PASSWORD_RESET_MAX_ATTEMPTS = 5
+PASSWORD_RESET_MAX_CODES_PER_HOUR = 5
 
 cloudinary_cloud_name = (os.getenv('CLOUDINARY_CLOUD_NAME') or '').strip()
 cloudinary_api_key = (os.getenv('CLOUDINARY_API_KEY') or '').strip()
@@ -390,7 +396,7 @@ def build_receipt_printer_payload(receipt):
 
 def generate_receipt_pdf_bytes(receipt, request):
     html_content = render_to_string('receipt_pdf.html', build_receipt_context(receipt))
-    if HTML is not None:
+    if HTML is not None and CSS is not None:
         try:
             css = CSS(string='''
                 body { font-family: Arial, sans-serif; margin: 0; padding: 0; color: #1f2937; }
@@ -1279,6 +1285,78 @@ class LogoutAPIView(APIView):
         return response
 
 
+class DeleteAccountAPIView(APIView):
+    """Delete a customer account on request (required by Google Play policy).
+
+    Used by both the mobile app and the public /delete-account/ web page, so it
+    authenticates with the account credentials rather than a session. Personal
+    data is erased; completed orders are kept with contact details removed so
+    sales and tax records stay intact.
+    """
+
+    permission_classes = [AllowAny]
+    ACTIVE_ORDER_STATUSES = ['Pending', 'Confirmed', 'Processing', 'Packed', 'Out for Delivery']
+
+    def post(self, request):
+        identifier = (request.data.get('email_or_phone') or request.data.get('email') or '').strip()
+        password = request.data.get('password')
+        if not identifier or not password:
+            return Response({'detail': 'Email or phone number and password are required.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user = authenticate(request, username=identifier, password=password)
+        if not user:
+            return Response({'detail': 'Invalid credentials.'}, status=status.HTTP_401_UNAUTHORIZED)
+
+        if user.role != 'Customer' or user.is_staff or user.is_superuser:
+            return Response({'detail': 'Staff accounts cannot be deleted here. Please contact Glow support.'}, status=status.HTTP_403_FORBIDDEN)
+
+        customer = Customer.objects.filter(user=user).first()
+        if customer and customer.orders.filter(order_status__in=self.ACTIVE_ORDER_STATUSES).exists():
+            return Response(
+                {'detail': 'You have an order in progress. Please wait until it is delivered or cancel it, then try again.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+        with transaction.atomic():
+            PushToken.objects.filter(user=user).delete()
+            WebPushSubscription.objects.filter(user=user).delete()
+            Notification.objects.filter(user=user).delete()
+            Recipe.objects.filter(user=user).delete()
+
+            if customer:
+                CustomerAddress.objects.filter(customer=customer).delete()
+                Review.objects.filter(customer=customer).delete()
+                ShoppingCart.objects.filter(customer=customer).delete()
+                customer.orders.update(delivery_address=None, phone_number=None, notes=None)
+                customer.salon_name = None
+                customer.owner_name = None
+                customer.district = None
+                customer.city = None
+                customer.address = None
+                customer.latitude = None
+                customer.longitude = None
+                customer.save()
+
+            user.email = f'deleted-user-{user.pk}@deleted.invalid'
+            user.phone_number = None
+            user.first_name = 'Deleted'
+            user.last_name = 'User'
+            user.profile_image = None
+            user.is_active = False
+            user.set_unusable_password()
+            user.save()
+
+        logging.getLogger(__name__).info('Customer account %s deleted on user request.', user.pk)
+        response = Response({'message': 'Your Glow account and personal data have been deleted.'}, status=status.HTTP_200_OK)
+        response.delete_cookie('access', path='/')
+        response.delete_cookie('refresh', path='/')
+        return response
+
+
+def delete_account_screen(request):
+    return render(request, 'frontend/delete_account.html')
+
+
 class RefreshAPIView(TokenRefreshView):
     permission_classes = [AllowAny]
 
@@ -1317,14 +1395,48 @@ class ForgotPasswordAPIView(APIView):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
+        # The same response is returned whether or not an account matches, and
+        # the reset code/token is only ever delivered by email or SMS, so this
+        # endpoint cannot be used to look up accounts or take them over.
+        generic_response = Response(
+            {'message': 'If an account matches, we have sent a 6-digit reset code to its email address and phone number.'},
+            status=status.HTTP_200_OK,
+        )
+
         identifier = serializer.validated_data['identifier']
         user = User.objects.filter(Q(email__iexact=identifier) | Q(phone_number=identifier)).first()
-        if not user:
-            return Response({'message': 'If that email exists, a reset link has been prepared.'}, status=status.HTTP_200_OK)
+        if not user or not user.is_active:
+            return generic_response
 
-        uid = urlsafe_base64_encode(force_bytes(user.pk))
-        token = default_token_generator.make_token(user)
-        return Response({'message': 'Reset instructions prepared.', 'uid': uid, 'token': token}, status=status.HTTP_200_OK)
+        now = timezone.now()
+        recent_codes = PasswordResetCode.objects.filter(user=user, created_at__gte=now - timedelta(hours=1))
+        if recent_codes.count() >= PASSWORD_RESET_MAX_CODES_PER_HOUR or recent_codes.filter(created_at__gte=now - timedelta(seconds=60)).exists():
+            return generic_response
+
+        code = f'{secrets.randbelow(1_000_000):06d}'
+        with transaction.atomic():
+            PasswordResetCode.objects.filter(user=user, used=False).update(used=True)
+            PasswordResetCode.objects.create(user=user, code_hash=make_password(code), expires_at=now + PASSWORD_RESET_CODE_LIFETIME)
+
+        link_html = ''
+        if user.role != 'Customer':
+            # Dashboard users can also reset through a link to the web login page.
+            uid = urlsafe_base64_encode(force_bytes(user.pk))
+            token = default_token_generator.make_token(user)
+            reset_link = f"{settings.FRONTEND_URL.rstrip('/')}/?{urlencode({'uid': uid, 'token': token})}"
+            link_html = f'<p>Or open this link to choose a new password: <a href="{reset_link}">{reset_link}</a></p>'
+
+        _send_email_message(
+            user.email,
+            'Your Glow password reset code',
+            f'<p>Your Glow password reset code is:</p><p style="font-size:24px;font-weight:bold;letter-spacing:4px">{code}</p>'
+            f'<p>It expires in 15 minutes.</p>{link_html}'
+            '<p>If you did not ask to reset your password, you can ignore this email.</p>',
+        )
+        if user.phone_number:
+            _send_textbee_sms(user.phone_number, f'Your Glow password reset code is {code}. It expires in 15 minutes. Do not share it with anyone.')
+
+        return generic_response
 
 
 class ResetPasswordAPIView(APIView):
@@ -1335,22 +1447,70 @@ class ResetPasswordAPIView(APIView):
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        uid = serializer.validated_data['uid']
-        token = serializer.validated_data['token']
         new_password = serializer.validated_data['new_password']
+        code = serializer.validated_data.get('code')
 
-        try:
-            user_id = force_str(urlsafe_base64_decode(uid))
-            user = User.objects.get(pk=user_id)
-        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
-            return Response({'detail': 'Invalid reset link.'}, status=status.HTTP_400_BAD_REQUEST)
+        if code:
+            # App flow: identifier + 6-digit code delivered by email/SMS.
+            invalid_code = Response({'detail': 'This code is invalid or has expired. Request a new code.'}, status=status.HTTP_400_BAD_REQUEST)
+            identifier = serializer.validated_data['identifier']
+            user = User.objects.filter(Q(email__iexact=identifier) | Q(phone_number=identifier), is_active=True).first()
+            reset_code = None
+            if user:
+                reset_code = (
+                    PasswordResetCode.objects
+                    .filter(user=user, used=False, expires_at__gt=timezone.now())
+                    .order_by('-created_at')
+                    .first()
+                )
+            if not reset_code:
+                return invalid_code
 
-        if not default_token_generator.check_token(user, token):
-            return Response({'detail': 'Invalid reset link.'}, status=status.HTTP_400_BAD_REQUEST)
+            if not check_password(code, reset_code.code_hash):
+                reset_code.attempts += 1
+                if reset_code.attempts >= PASSWORD_RESET_MAX_ATTEMPTS:
+                    reset_code.used = True
+                reset_code.save(update_fields=['attempts', 'used'])
+                return invalid_code
+
+            reset_code.used = True
+            reset_code.save(update_fields=['used'])
+        else:
+            # Dashboard flow: uid + token from the emailed reset link.
+            try:
+                user_id = force_str(urlsafe_base64_decode(serializer.validated_data['uid']))
+                user = User.objects.get(pk=user_id)
+            except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+                return Response({'detail': 'Invalid reset link.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            if not default_token_generator.check_token(user, serializer.validated_data['token']):
+                return Response({'detail': 'Invalid reset link.'}, status=status.HTTP_400_BAD_REQUEST)
 
         user.set_password(new_password)
         user.save()
         return Response({'message': 'Password reset successful.'}, status=status.HTTP_200_OK)
+
+
+class ChangePasswordAPIView(APIView):
+    permission_classes = [IsActiveUser]
+
+    def post(self, request):
+        current_password = request.data.get('current_password') or ''
+        new_password = request.data.get('new_password') or ''
+        confirm_password = request.data.get('confirm_password', new_password)
+
+        if not request.user.check_password(current_password):
+            return Response({'detail': 'Your current password is incorrect.'}, status=status.HTTP_400_BAD_REQUEST)
+        if len(new_password) < 8:
+            return Response({'detail': 'Use at least 8 characters for your new password.'}, status=status.HTTP_400_BAD_REQUEST)
+        if new_password != confirm_password:
+            return Response({'detail': 'Your new passwords do not match.'}, status=status.HTTP_400_BAD_REQUEST)
+        if new_password == current_password:
+            return Response({'detail': 'Choose a password different from your current one.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        request.user.set_password(new_password)
+        request.user.save()
+        return Response({'message': 'Password updated successfully.'}, status=status.HTTP_200_OK)
 
 
 class BannerListAPIView(APIView):
@@ -2503,6 +2663,9 @@ class AdminPaymentListAPIView(APIView):
             'payment_method': payment.payment_method,
             'payment_status': payment.payment_status,
             'payment_date': payment.payment_date.isoformat() if payment.payment_date else None,
+            # Dashboard date filters use this immutable creation timestamp rather
+            # than a nullable payment date.
+            'created_at': payment.created_at.isoformat(),
         } for payment in payments]
         return Response(data, status=status.HTTP_200_OK)
 
@@ -2572,6 +2735,7 @@ class AdminDeliveryListAPIView(APIView):
                 'address': address,
                 'delivery_address': address,
                 'estimatedDeliveryTime': delivery.estimated_delivery_time.isoformat() if getattr(delivery, 'estimated_delivery_time', None) else None,
+                'created_at': delivery.created_at.isoformat(),
                 'status': normalized_status,
                 'receiptIssued': bool(receipt_exists),
             })
@@ -3595,6 +3759,8 @@ class AdminOrderListAPIView(APIView):
                 'total_amount': float(order.total_amount),
                 'payment_status': order.payment_status,
                 'order_status': order.order_status,
+                'created_at': order.created_at.isoformat(),
+                'order_date': order.order_date.isoformat() if order.order_date else None,
                 'items': [{'product_name': item.product_name, 'quantity': item.quantity} for item in order.items.all()],
             })
         return Response(data, status=status.HTTP_200_OK)
